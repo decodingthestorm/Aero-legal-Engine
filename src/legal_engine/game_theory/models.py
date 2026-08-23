@@ -24,7 +24,7 @@ class ComplianceGameParams(BaseModel):
     p_detect: float = Field(gt=0, le=1, description="Probability evasion is detected")
 
     @model_validator(mode="after")
-    def _validate(self) -> "ComplianceGameParams":
+    def _validate(self) -> ComplianceGameParams:
         if self.p_detect <= 0:
             raise ValueError("p_detect must be > 0: a zero-detection game has no finite deterrent")
         return self

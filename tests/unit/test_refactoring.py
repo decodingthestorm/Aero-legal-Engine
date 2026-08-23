@@ -1,7 +1,5 @@
-import numpy as np
 import pytest
 
-from legal_engine.core.exceptions import UnbalancedCycleError
 from legal_engine.refactoring.cycle_detector import find_negative_weight_cycles
 from legal_engine.refactoring.dependency_graph import DependencyGraphBuilder
 from legal_engine.refactoring.zero_arbitrage import apply_correction, solve_zero_arbitrage

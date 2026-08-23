@@ -15,11 +15,11 @@ class DependencyGraphBuilder:
     def __init__(self) -> None:
         self._graph: nx.DiGraph = nx.DiGraph()
 
-    def add_node(self, node_id: str, **attrs) -> "DependencyGraphBuilder":
+    def add_node(self, node_id: str, **attrs) -> DependencyGraphBuilder:
         self._graph.add_node(node_id, **attrs)
         return self
 
-    def add_dependency(self, source: str, target: str, weight: float, **attrs) -> "DependencyGraphBuilder":
+    def add_dependency(self, source: str, target: str, weight: float, **attrs) -> DependencyGraphBuilder:
         self._graph.add_edge(source, target, weight=weight, **attrs)
         return self
 

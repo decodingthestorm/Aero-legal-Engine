@@ -2,7 +2,7 @@
 
 A legal ingestion, formal verification, and game-theoretic statutory optimization platform.
 
-## What's built so far (Phase 1)
+## What's built so far (Phases 1-2)
 
 - **`core/`** — shared Pydantic v2 models (statutes, jurisdiction tiers, actors, payoff
   matrices, proof results, WAL entries), settings, exceptions, structured logging.
@@ -15,14 +15,23 @@ A legal ingestion, formal verification, and game-theoretic statutory optimizatio
 - **`refactoring/`** — builds statutory/tax dependency graphs, finds negative-weight loophole
   cycles (Tarjan SCC + Johnson simple-cycle enumeration), and solves the cycle-basis system
   `B @ w = 0` to zero them out with a minimum-norm correction.
+- **`knowledge_graph/`** — a statute/entity graph (`GraphService`, NetworkX-backed by default,
+  Neo4j-backed implementation included but untested here), text embeddings (`Embedder`,
+  deterministic hashing-based by default, real all-MiniLM-L6-v2 wrapper included but not
+  exercised here), a cosine-distance vector index (`VectorIndex`, in-memory by default,
+  Qdrant-backed implementation included but untested here), and `preemption.py`, which resolves
+  Article VI Supremacy Clause conflicts between statutes tied to the same entity.
 
-Everything above has a passing unit test suite under `tests/unit/`.
+Everything above has a passing unit and integration test suite under `tests/`.
+
+Each optional "real backend" (Neo4j, Qdrant, sentence-transformers) is behind a lazy import and
+an install extra (`pip install -e ".[graph-neo4j,vector-qdrant,semantic]"`) — the default,
+tested path never requires them.
 
 ## Not yet implemented
 
-`ingestion/`, `knowledge_graph/`, `api/`, `workers/`, `ui/`, Docker/k8s deployment, and the WAL
-are scaffolded (directory structure + stub modules) but not built out yet — see the phased plan
-below.
+`ingestion/`, `api/`, `workers/`, `ui/`, Docker/k8s deployment, and the WAL are scaffolded
+(directory structure + stub modules) but not built out yet — see the phased plan below.
 
 One deliberate deviation from the original spec: ingestion is planned as a polite, rate-limited
 crawler (respects `robots.txt`, conservative concurrency, honest User-Agent, standard
@@ -41,7 +50,7 @@ pytest
 ## Phased build plan
 
 1. **Core schemas, formal logic & game theory** — done.
-2. Hybrid knowledge graph & preemption resolver.
+2. **Hybrid knowledge graph & preemption resolver** — done.
 3. Ingestion subsystem & structured parsers (polite crawling).
 4. State ledger (WAL), Celery workers & FastAPI gateway.
 5. Production infrastructure, Next.js UI & release.

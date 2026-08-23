@@ -10,26 +10,36 @@ requires-python = ">=3.11"
 readme = "README.md"
 license = { text = "Proprietary" }
 dependencies = [
+    # Core: used by every subsystem that's actually implemented so far
+    # (core/, formal_logic/, game_theory/, refactoring/,
+    # knowledge_graph/'s default in-process backends).
     "z3-solver>=4.12.0",
     "networkx>=3.2",
     "numpy>=1.26.0",
     "scipy>=1.12.0",
     "pydantic>=2.6.0",
     "pydantic-settings>=2.1.0",
-    "playwright>=1.42.0",
-    "httpx>=0.27.0",
-    "beautifulsoup4>=4.12.0",
-    "chromadb>=0.4.22",
-    "sentence-transformers>=2.5.0",
-    "celery>=5.3.6",
-    "redis>=5.0.1",
-    "fastapi>=0.110.0",
-    "uvicorn>=0.28.0",
     "structlog>=24.1.0",
-    "cryptography>=42.0.0",
 ]
 
 [project.optional-dependencies]
+# Each of these backs one lazily-imported "real backend" class (see
+# knowledge_graph/{graph_service,vector_service,embeddings}.py) — none of
+# them is required to run the default in-process implementations or the
+# test suite. Split out so CI and local dev don't pay for a
+# sentence-transformers/torch install just to run unit tests.
+semantic = ["sentence-transformers>=2.5.0"]
+vector-qdrant = ["qdrant-client>=1.7.0"]
+graph-neo4j = ["neo4j>=5.19.0"]
+ingestion = ["playwright>=1.42.0", "httpx>=0.27.0", "beautifulsoup4>=4.12.0"]
+api = ["fastapi>=0.110.0", "uvicorn>=0.28.0"]
+workers = ["celery>=5.3.6", "redis>=5.0.1"]
+crypto = ["cryptography>=42.0.0"]  # core/wal.py, Phase 4
+
+all = [
+    "legal-engine[semantic,vector-qdrant,graph-neo4j,ingestion,api,workers,crypto]",
+]
+
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
@@ -53,3 +63,8 @@ target-version = "py311"
 [tool.mypy]
 python_version = "3.11"
 strict = true
+
+[[tool.mypy.overrides]]
+# Untyped/optional third-party dependencies with no published stubs.
+module = ["networkx.*", "z3.*", "neo4j.*", "qdrant_client.*", "sentence_transformers.*"]
+ignore_missing_imports = true

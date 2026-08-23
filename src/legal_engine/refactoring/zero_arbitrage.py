@@ -64,7 +64,7 @@ def build_cycle_basis_matrix(graph: nx.DiGraph) -> tuple[np.ndarray, list[Edge]]
             for neighbor in multi.neighbors(node):
                 if neighbor in visited:
                     continue
-                for _key, data in multi.get_edge_data(node, neighbor).items():
+                for data in multi.get_edge_data(node, neighbor).values():
                     idx = data["index"]
                     if idx in tree_edge_indices:
                         continue

@@ -29,7 +29,6 @@ from legal_engine.formal_logic.ast_nodes import (
     Implies,
     Not,
     Or,
-    Variable,
     free_variables,
 )
 

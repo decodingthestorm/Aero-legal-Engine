@@ -33,7 +33,13 @@ def test_strict_convexity_midpoint_inequality(k, x_limit, x1, x2, t):
     lhs = convex_penalty(midpoint, params)
     rhs = t * convex_penalty(x1, params) + (1 - t) * convex_penalty(x2, params)
 
-    assert lhs <= rhs + 1e-6
+    # Tolerance scales with magnitude: at rhs ~ 1e11 (large k/x_limit/x
+    # combinations), float64 rounding alone is ~1e-5, so a bare 1e-6 absolute
+    # tolerance is too tight and flags rounding noise as a convexity
+    # violation. This is a property-test precision fix, not a change to
+    # convex_penalty's actual (exactly convex) math.
+    tolerance = 1e-6 + 1e-9 * abs(rhs)
+    assert lhs <= rhs + tolerance
 
 
 @given(k=_positive_floats, x_limit=_finite_floats, deviation=_positive_floats)

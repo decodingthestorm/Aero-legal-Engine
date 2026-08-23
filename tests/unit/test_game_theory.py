@@ -9,7 +9,10 @@ from legal_engine.game_theory.mechanism import (
     satisfies_mechanism_constraints,
 )
 from legal_engine.game_theory.models import ComplianceGameParams, ConvexPenaltyParams
-from legal_engine.game_theory.nash_solver import find_dominant_strategy, is_compliance_dominant_for_actor
+from legal_engine.game_theory.nash_solver import (
+    find_dominant_strategy,
+    is_compliance_dominant_for_actor,
+)
 from legal_engine.game_theory.penalty_optimizer import (
     calibrate_convexity_for_floor,
     convex_penalty,

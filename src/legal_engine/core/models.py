@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from uuid import UUID, uuid4
 
@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class JurisdictionTier(int, Enum):
@@ -22,7 +22,7 @@ class JurisdictionTier(int, Enum):
     COUNTY = 3
     MUNICIPAL = 4
 
-    def preempts(self, other: "JurisdictionTier") -> bool:
+    def preempts(self, other: JurisdictionTier) -> bool:
         return self.value < other.value
 
 
@@ -43,7 +43,7 @@ class GeoBoundary(BaseModel):
     lon_max: float = Field(ge=-180, le=180)
 
     @model_validator(mode="after")
-    def _check_ordering(self) -> "GeoBoundary":
+    def _check_ordering(self) -> GeoBoundary:
         if self.lat_min > self.lat_max:
             raise ValueError("lat_min must be <= lat_max")
         if self.lon_min > self.lon_max:

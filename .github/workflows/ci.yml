@@ -26,5 +26,8 @@ jobs:
       - name: Unit tests
         run: pytest tests/unit -v
 
+      - name: Integration tests
+        run: pytest tests/integration -v
+
       - name: Property tests
         run: pytest tests/property -v
