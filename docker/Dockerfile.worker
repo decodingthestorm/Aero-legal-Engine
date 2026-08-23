@@ -1,0 +1,12 @@
+# Distributed Celery worker container.
+# Note: workers/tasks.py is not implemented yet (Phase 4).
+FROM python:3.11-slim AS base
+
+WORKDIR /app
+
+COPY pyproject.toml README.md ./
+COPY src ./src
+
+RUN pip install --no-cache-dir .
+
+CMD ["celery", "-A", "legal_engine.workers.celery_app", "worker", "--loglevel=info"]

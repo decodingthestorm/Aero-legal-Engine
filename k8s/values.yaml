@@ -1,0 +1,33 @@
+api:
+  image:
+    repository: ghcr.io/example/legal-engine/api
+    tag: latest
+  replicaCount: 2
+  port: 8000
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+worker:
+  image:
+    repository: ghcr.io/example/legal-engine/worker
+    tag: latest
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+ingress:
+  enabled: true
+  host: legal-engine.example.com
+  tls:
+    enabled: true
+    secretName: legal-engine-tls

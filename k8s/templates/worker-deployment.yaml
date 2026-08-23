@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: legal-engine-worker
+spec:
+  replicas: {{ .Values.worker.replicaCount }}
+  selector:
+    matchLabels:
+      app: legal-engine-worker
+  template:
+    metadata:
+      labels:
+        app: legal-engine-worker
+    spec:
+      containers:
+        - name: worker
+          image: "{{ .Values.worker.image.repository }}:{{ .Values.worker.image.tag }}"
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
