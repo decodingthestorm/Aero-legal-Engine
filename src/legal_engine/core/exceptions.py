@@ -13,6 +13,10 @@ class ParseError(IngestionError):
     """Raised when a parser cannot extract a valid document structure."""
 
 
+class RobotsDisallowedError(IngestionError):
+    """Raised when robots.txt disallows fetching a URL for our user agent."""
+
+
 class FormalLogicError(LegalEngineError):
     """Base class for formal-logic compilation/solving errors."""
 

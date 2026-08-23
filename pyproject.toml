@@ -12,7 +12,11 @@ license = { text = "Proprietary" }
 dependencies = [
     # Core: used by every subsystem that's actually implemented so far
     # (core/, formal_logic/, game_theory/, refactoring/,
-    # knowledge_graph/'s default in-process backends).
+    # knowledge_graph/'s default in-process backends, ingestion/'s polite
+    # crawler and parsers). httpx/beautifulsoup4 are hard imports in
+    # ingestion/rate_limiter.py and ingestion/parsers/municipal.py — not
+    # lazily-loaded optional backends like the ones below — so they belong
+    # here rather than behind an extra.
     "z3-solver>=4.12.0",
     "networkx>=3.2",
     "numpy>=1.26.0",
@@ -20,24 +24,28 @@ dependencies = [
     "pydantic>=2.6.0",
     "pydantic-settings>=2.1.0",
     "structlog>=24.1.0",
+    "httpx>=0.27.0",
+    "beautifulsoup4>=4.12.0",
 ]
 
 [project.optional-dependencies]
 # Each of these backs one lazily-imported "real backend" class (see
-# knowledge_graph/{graph_service,vector_service,embeddings}.py) — none of
-# them is required to run the default in-process implementations or the
-# test suite. Split out so CI and local dev don't pay for a
-# sentence-transformers/torch install just to run unit tests.
+# knowledge_graph/{graph_service,vector_service,embeddings}.py,
+# ingestion/ocr.py) — none of them is required to run the default
+# in-process implementations or the test suite. Split out so CI and local
+# dev don't pay for a sentence-transformers/torch install (or a Playwright
+# browser download) just to run unit tests.
 semantic = ["sentence-transformers>=2.5.0"]
 vector-qdrant = ["qdrant-client>=1.7.0"]
 graph-neo4j = ["neo4j>=5.19.0"]
-ingestion = ["playwright>=1.42.0", "httpx>=0.27.0", "beautifulsoup4>=4.12.0"]
+js-rendering = ["playwright>=1.42.0"]  # not used by any parser yet; httpx covers static HTML/XML
+ocr = ["pytesseract>=0.3.10", "pdf2image>=1.17.0"]
 api = ["fastapi>=0.110.0", "uvicorn>=0.28.0"]
 workers = ["celery>=5.3.6", "redis>=5.0.1"]
 crypto = ["cryptography>=42.0.0"]  # core/wal.py, Phase 4
 
 all = [
-    "legal-engine[semantic,vector-qdrant,graph-neo4j,ingestion,api,workers,crypto]",
+    "legal-engine[semantic,vector-qdrant,graph-neo4j,js-rendering,ocr,api,workers,crypto]",
 ]
 
 dev = [
@@ -54,7 +62,7 @@ packages = ["src/legal_engine"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-# asyncio_mode = "auto"  # re-enable once pytest-asyncio is installed (Phase 3/4)
+asyncio_mode = "auto"
 
 [tool.ruff]
 line-length = 100
