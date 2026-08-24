@@ -778,6 +778,14 @@ to configure for the rest of the suite, which tests the same repositories agains
 Any future SQL-backed store should get an entry in that job too: the user repository was added in
 v1.3.0 and went uncovered there until v1.9.2, running against SQLite alone the whole time.
 
+[`AGENTS.md`](AGENTS.md) covers the conventions that aren't obvious from the code — the release
+ritual, the optional-backend pattern, the environment gotchas, and the rule that pasted plans get
+verified against the codebase before anything is built. [`docs/v2-proposal.md`](docs/v2-proposal.md)
+is the review of a proposed v2.0 architecture: one node of it shipped (the semantic-entropy gate),
+three remain buildable, two can't be built here, and six defects are documented — including an
+abstention threshold that could never fire and a pooling pattern that would have leaked data across
+tenants. It's a record of what was assessed, not a plan of record.
+
 Three gates run in CI and should be run locally before a commit:
 
 ```bash
