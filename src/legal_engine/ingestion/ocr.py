@@ -22,10 +22,11 @@ class TesseractOCRPipeline:
         try:
             import pdf2image  # noqa: F401
             import pytesseract  # noqa: F401
-        except ImportError as exc:
+        except Exception as exc:
             raise ImportError(
                 "TesseractOCRPipeline requires: pip install pytesseract pdf2image "
-                "(plus the Tesseract OCR and poppler system binaries)"
+                "(plus the Tesseract OCR and poppler system binaries) "
+                f"(underlying error: {exc.__class__.__name__}: {exc})"
             ) from exc
         self._dpi = dpi
 

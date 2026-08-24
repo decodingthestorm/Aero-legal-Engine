@@ -80,9 +80,10 @@ class QdrantVectorIndex:
     def __init__(self, collection_name: str, url: str = settings.qdrant_url) -> None:
         try:
             from qdrant_client import QdrantClient
-        except ImportError as exc:
+        except Exception as exc:
             raise ImportError(
-                "QdrantVectorIndex requires the 'qdrant-client' package: pip install qdrant-client"
+                "QdrantVectorIndex requires the 'qdrant-client' package: pip install qdrant-client "
+                f"(underlying error: {exc.__class__.__name__}: {exc})"
             ) from exc
         self._client = QdrantClient(url=url)
         self._collection_name = collection_name

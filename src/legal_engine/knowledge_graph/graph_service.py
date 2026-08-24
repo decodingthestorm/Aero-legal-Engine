@@ -115,9 +115,10 @@ class Neo4jGraphService:
     def __init__(self, uri: str, user: str, password: str) -> None:
         try:
             from neo4j import GraphDatabase
-        except ImportError as exc:
+        except Exception as exc:
             raise ImportError(
-                "Neo4jGraphService requires the 'neo4j' package: pip install neo4j"
+                "Neo4jGraphService requires the 'neo4j' package: pip install neo4j "
+                f"(underlying error: {exc.__class__.__name__}: {exc})"
             ) from exc
         self._driver = GraphDatabase.driver(uri, auth=(user, password))
 

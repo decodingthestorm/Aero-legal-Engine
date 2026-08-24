@@ -65,9 +65,18 @@ class SentenceTransformerEmbedder:
     def __init__(self, model_name: str = settings.embedding_model) -> None:
         try:
             from sentence_transformers import SentenceTransformer
-        except ImportError as exc:
+        except Exception as exc:
+            # Not just ImportError: sentence-transformers pulls in torch (and
+            # transitively scipy/sklearn), whose native extensions can fail
+            # to load for reasons that surface as OSError or a torch/scipy-
+            # internal ImportError rather than "no module named X" — e.g. a
+            # Windows Application Control policy blocking a DLL, or a CUDA/
+            # driver mismatch. Whatever the underlying cause, the actionable
+            # message is the same, so it's normalized to one ImportError here.
             raise ImportError(
-                "SentenceTransformerEmbedder requires: pip install sentence-transformers"
+                "SentenceTransformerEmbedder requires a working sentence-transformers "
+                f"install: pip install sentence-transformers (underlying error: "
+                f"{exc.__class__.__name__}: {exc})"
             ) from exc
         self._model = SentenceTransformer(model_name)
         self.dimension = self._model.get_sentence_embedding_dimension()
