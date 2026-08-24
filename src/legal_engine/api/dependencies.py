@@ -6,6 +6,16 @@ main.py's lifespan actually constructs is a settings change
 (knowledge_graph/factory.py, persistence/factory.py), not a route change;
 and ``require_auth`` below is a real, working (if deliberately simple) JWT
 check, off by default via settings.api_auth_enabled.
+
+``get_current_tenant`` and ``require_auth`` both validate the same bearer
+token but for different purposes — ``require_auth`` (applied at the router
+level, gating every route in a protected router) answers "is this request
+allowed at all," while ``get_current_tenant`` (injected only by the
+graph.py routes that actually touch tenant-scoped data — verification/
+simulation/refactoring have no persisted state to isolate) answers "which
+tenant's data does this request see." Keeping them separate, rather than
+unifying into one dependency, costs a small duplicated JWT decode per
+request in exchange for each one staying simple and single-purpose.
 """
 
 from __future__ import annotations
@@ -14,22 +24,51 @@ from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request, status
 
-from legal_engine.api.security import InvalidTokenError, verify_token
+from legal_engine.api.security import InvalidTokenError, get_token_tenant, verify_token
 from legal_engine.core.config import settings
 from legal_engine.formal_logic.solver_pool import SolverPool
 from legal_engine.ingestion.rate_limiter import PoliteFetcher
 from legal_engine.knowledge_graph.embeddings import Embedder
 from legal_engine.knowledge_graph.graph_service import GraphService
+from legal_engine.knowledge_graph.tenant_registry import TenantIndexRegistry
 from legal_engine.knowledge_graph.vector_service import VectorIndex
 from legal_engine.persistence.repository import StatuteRepository
 
 
-def get_graph_service(request: Request) -> GraphService:
-    return request.app.state.graph_service
+async def get_current_tenant(request: Request) -> str:
+    """Returns settings.default_tenant_id when auth is disabled (the
+    default — the whole deployment behaves as one tenant, unchanged from
+    pre-multi-tenancy behavior). When enabled, requires a valid bearer
+    token carrying a tenant_id claim."""
+    if not settings.api_auth_enabled:
+        return settings.default_tenant_id
+
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
+
+    try:
+        return get_token_tenant(auth_header.removeprefix("Bearer "))
+    except InvalidTokenError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
 
 
-def get_vector_index(request: Request) -> VectorIndex:
-    return request.app.state.vector_index
+def get_tenant_registry(request: Request) -> TenantIndexRegistry:
+    return request.app.state.tenant_registry
+
+
+def get_graph_service(
+    tenant_id: Annotated[str, Depends(get_current_tenant)],
+    registry: Annotated[TenantIndexRegistry, Depends(get_tenant_registry)],
+) -> GraphService:
+    return registry.graph_for(tenant_id)
+
+
+def get_vector_index(
+    tenant_id: Annotated[str, Depends(get_current_tenant)],
+    registry: Annotated[TenantIndexRegistry, Depends(get_tenant_registry)],
+) -> VectorIndex:
+    return registry.vector_for(tenant_id)
 
 
 def get_embedder(request: Request) -> Embedder:
@@ -72,3 +111,4 @@ EmbedderDep = Annotated[Embedder, Depends(get_embedder)]
 SolverPoolDep = Annotated[SolverPool, Depends(get_solver_pool)]
 FetcherDep = Annotated[PoliteFetcher, Depends(get_fetcher)]
 StatuteRepositoryDep = Annotated[StatuteRepository, Depends(get_statute_repository)]
+TenantIdDep = Annotated[str, Depends(get_current_tenant)]

@@ -23,11 +23,8 @@ from legal_engine.core.config import settings
 from legal_engine.core.logging import configure_logging, get_logger
 from legal_engine.formal_logic.solver_pool import SolverPool
 from legal_engine.ingestion.rate_limiter import PoliteFetcher
-from legal_engine.knowledge_graph.factory import (
-    build_embedder,
-    build_graph_service,
-    build_vector_index,
-)
+from legal_engine.knowledge_graph.factory import build_embedder
+from legal_engine.knowledge_graph.tenant_registry import TenantIndexRegistry
 from legal_engine.persistence.factory import build_statute_repository
 from legal_engine.persistence.hydration import hydrate_indexes
 
@@ -37,8 +34,11 @@ logger = get_logger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logging()
-    app.state.graph_service = build_graph_service()
-    app.state.vector_index = build_vector_index()
+    # Per-tenant GraphService/VectorIndex instances — see
+    # knowledge_graph/tenant_registry.py — replace the single shared
+    # graph_service/vector_index that pre-multi-tenancy code used to build
+    # here directly.
+    app.state.tenant_registry = TenantIndexRegistry()
     app.state.embedder = build_embedder()
     app.state.solver_pool = SolverPool(
         pool_size=settings.z3_pool_size,
@@ -50,7 +50,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await app.state.statute_repository.create_schema()
 
     rehydrated_count = await hydrate_indexes(
-        app.state.statute_repository, app.state.graph_service, app.state.vector_index, app.state.embedder
+        app.state.statute_repository, app.state.tenant_registry, app.state.embedder
     )
     if rehydrated_count:
         logger.info("rehydrated_indexes_from_statute_repository", count=rehydrated_count)
@@ -63,7 +63,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Legal Engine Platform API", version="1.1.0", lifespan=lifespan)
+    app = FastAPI(title="Legal Engine Platform API", version="1.2.0", lifespan=lifespan)
     add_middleware(app)
 
     # /auth/token itself must stay unprotected (that's the only way to get a

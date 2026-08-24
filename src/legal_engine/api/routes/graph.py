@@ -19,6 +19,7 @@ from legal_engine.api.dependencies import (
     EmbedderDep,
     GraphServiceDep,
     StatuteRepositoryDep,
+    TenantIdDep,
     VectorIndexDep,
 )
 from legal_engine.core.models import JurisdictionTier, SourceType, StatuteDocument
@@ -44,6 +45,7 @@ class AddStatuteResponse(BaseModel):
 @router.post("/statutes", response_model=AddStatuteResponse)
 async def add_statute(
     request: AddStatuteRequest,
+    tenant_id: TenantIdDep,
     graph_service: GraphServiceDep,
     vector_index: VectorIndexDep,
     embedder: EmbedderDep,
@@ -59,13 +61,15 @@ async def add_statute(
     )
     graph_service.add_statute(statute, applies_to=request.applies_to)
     vector_index.upsert(statute.id, embedder.embed(statute.text), {"citation": statute.citation})
-    await statute_repository.add(statute)
+    await statute_repository.add(statute, tenant_id)
     return AddStatuteResponse(id=str(statute.id), citation=statute.citation)
 
 
 @router.get("/statutes/{statute_id}", response_model=StatuteDocument)
-async def get_statute(statute_id: UUID, statute_repository: StatuteRepositoryDep) -> StatuteDocument:
-    statute = await statute_repository.get(statute_id)
+async def get_statute(
+    statute_id: UUID, tenant_id: TenantIdDep, statute_repository: StatuteRepositoryDep
+) -> StatuteDocument:
+    statute = await statute_repository.get(statute_id, tenant_id)
     if statute is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Statute not found")
     return statute
@@ -73,11 +77,11 @@ async def get_statute(statute_id: UUID, statute_repository: StatuteRepositoryDep
 
 @router.get("/statutes", response_model=list[StatuteDocument])
 async def list_statutes(
-    statute_repository: StatuteRepositoryDep, citation: str | None = None
+    tenant_id: TenantIdDep, statute_repository: StatuteRepositoryDep, citation: str | None = None
 ) -> list[StatuteDocument]:
     if citation is not None:
-        return await statute_repository.list_by_citation(citation)
-    return await statute_repository.all()
+        return await statute_repository.list_by_citation(citation, tenant_id)
+    return await statute_repository.all(tenant_id)
 
 
 class PreemptionResponse(BaseModel):

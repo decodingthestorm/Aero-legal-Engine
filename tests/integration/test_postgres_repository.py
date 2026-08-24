@@ -24,6 +24,7 @@ import pytest
 from legal_engine.core.models import GeoBoundary, JurisdictionTier, SourceType, StatuteDocument
 
 _DSN = os.environ.get("LEGAL_ENGINE_TEST_POSTGRES_DSN")
+_TENANT = "postgres-integration-tenant"
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -58,9 +59,9 @@ async def repo():
 
 async def test_add_and_get_roundtrip_against_real_postgres(repo):
     statute = _statute()
-    await repo.add(statute)
+    await repo.add(statute, _TENANT)
 
-    fetched = await repo.get(statute.id)
+    fetched = await repo.get(statute.id, _TENANT)
     assert fetched.id == statute.id
     assert fetched.citation == statute.citation
     assert fetched.jurisdiction_tier == statute.jurisdiction_tier
@@ -70,9 +71,9 @@ async def test_geo_boundary_roundtrip_against_real_postgres(repo):
     statute = _statute(
         geo_boundary=GeoBoundary(lat_min=1.0, lat_max=2.0, lon_min=3.0, lon_max=4.0)
     )
-    await repo.add(statute)
+    await repo.add(statute, _TENANT)
 
-    fetched = await repo.get(statute.id)
+    fetched = await repo.get(statute.id, _TENANT)
     assert fetched.geo_boundary == statute.geo_boundary
 
 
@@ -80,16 +81,23 @@ async def test_list_by_citation_against_real_postgres(repo):
     citation = f"Sec. PG-Shared-{uuid4()}"
     a = _statute(citation=citation)
     b = _statute(citation=citation)
-    await repo.add(a)
-    await repo.add(b)
+    await repo.add(a, _TENANT)
+    await repo.add(b, _TENANT)
 
-    results = await repo.list_by_citation(citation)
+    results = await repo.list_by_citation(citation, _TENANT)
     assert {s.id for s in results} == {a.id, b.id}
 
 
 async def test_applies_to_roundtrip_against_real_postgres(repo):
     statute = _statute(applies_to=["entity-a", "entity-b"])
-    await repo.add(statute)
+    await repo.add(statute, _TENANT)
 
-    fetched = await repo.get(statute.id)
+    fetched = await repo.get(statute.id, _TENANT)
     assert fetched.applies_to == ["entity-a", "entity-b"]
+
+
+async def test_get_does_not_leak_across_tenants_against_real_postgres(repo):
+    statute = _statute()
+    await repo.add(statute, _TENANT)
+
+    assert await repo.get(statute.id, "a-different-tenant") is None

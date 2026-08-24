@@ -3,12 +3,17 @@
 A legal ingestion, formal verification, and game-theoretic statutory optimization platform.
 
 v1.0.0 marked the completion of the 5-phase build plan below: every subsystem the original spec
-called for exists and has a passing test suite. v1.1.0 closes three of the five items that v1.0.0's
+called for exists and has a passing test suite. v1.1.0 closed three of the five items that v1.0.0's
 Known Limitations honestly flagged as open — startup reindexing, cross-browser E2E coverage, and
 load-test hardening (including a graceful-degradation path for genuine solver timeouts) — leaving
-two deliberately not done: multi-tenant auth and a liability-disclaimer UI, both scoped and
-declined for now (see Known Limitations). This still doesn't mean "battle-tested production
-system" — read on for what would still take.
+two deliberately not done: multi-tenant auth and a liability-disclaimer UI. v1.2.0 closes the
+multi-tenant auth gap for real: `StatuteRepository`, `GraphService`, and `VectorIndex` are now all
+tenant-scoped end-to-end, driven by the `tenant_id` claim in the JWT a client authenticates with
+(see "Multi-tenant data isolation" below). The liability-disclaimer UI item remains deliberately
+declined (see Known Limitations) — it was assessed as security theater (a client-controlled header
+check with no enforcement teeth) rather than a real control, and no alternative for it has been
+requested. This still doesn't mean "battle-tested production system" — read on for what would
+still take.
 
 ## What's built
 
@@ -72,14 +77,16 @@ system" — read on for what would still take.
   Auth is a real (if deliberately simple — a dependency-free HS256 JWT implementation rather than
   pulling in PyJWT for a few dozen lines) bearer-token check, off by default via
   `settings.api_auth_enabled` so it doesn't get in the way of local development or most of the
-  test suite.
+  test suite. Since v1.2.0, the token's `tenant_id` claim is what actually drives data isolation —
+  see "Multi-tenant data isolation" below.
 - **`persistence/`** — the durable, queryable system-of-record for ingested statutes, separate
   from the graph/vector *indexes* above (which are rebuildable from this). `StatuteRepository` is
   in-memory by default; `settings.statute_backend = "sql"` switches to `SqlAlchemyStatuteRepository`
   (`sql_repository.py`), which works against any SQLAlchemy-async DSN — `postgresql+asyncpg://` in
   production (`docker-compose.yml` runs Postgres; the `postgres` install extra pulls in
   `sqlalchemy`+`asyncpg`), `sqlite+aiosqlite://` in this codebase's own test suite, since there's no
-  Postgres available to test against for real in the environment this was built in.
+  Postgres available to test against for real in the environment this was built in. Every method
+  takes a `tenant_id` and scopes to it (see "Multi-tenant data isolation" below).
   `tests/integration/test_statute_persistence.py` proves durability through the real API lifespan
   (add a statute, tear the app down, bring a fresh instance up pointed at the same SQLite file, read
   it back), and `tests/integration/test_postgres_repository.py` runs the same repository against a
@@ -95,9 +102,48 @@ system" — read on for what would still take.
   startup (a no-op for the default in-memory statute backend, since `.all()` is always empty on a
   fresh process there). This required a real schema change, not just a lifespan snippet:
   `StatuteDocument.applies_to` didn't exist before — the statute-to-entity association
-  `GraphService.add_statute` needs was never durably recorded anywhere to rebuild from.
+  `GraphService.add_statute` needs was never durably recorded anywhere to rebuild from. Since
+  v1.2.0, `hydrate_indexes` rebuilds every tenant's indexes independently (via
+  `StatuteRepository.list_tenant_ids()`), not just one shared graph/vector pair.
   `tests/integration/test_statute_persistence.py` now proves the graph/vector state — not just the
   statute record — survives a restart.
+
+### Multi-tenant data isolation
+
+Added in v1.2.0, replacing v1.1.0's Known Limitations entry that flagged auth as not actually
+isolating tenant data. Two mechanisms, matched to how cheap each backend is to duplicate:
+
+- **`StatuteRepository`** (`persistence/repository.py`, `sql_repository.py`) — one shared instance,
+  every query scoped by a `tenant_id` argument. The in-memory backend keys its dict by
+  `(tenant_id, id)`; the SQL backend gives `StatuteRecord` a composite primary key of
+  `(id, tenant_id)` rather than `id` alone, specifically so that two tenants' statutes sharing the
+  same UUID (e.g. via `model_copy`, or a genuine `uuid4` collision) land as two independent rows
+  instead of the second write silently overwriting the first through `session.merge()` — an actual
+  bug this multi-tenant work caught in its own first draft, fixed before it shipped. `get()` and
+  `list_by_citation()` return "not found" identically whether a record doesn't exist or exists under
+  a different tenant — no operation ever confirms even the *existence* of another tenant's data.
+- **`GraphService` / `VectorIndex`** (`knowledge_graph/tenant_registry.py`'s `TenantIndexRegistry`)
+  — cheap to construct (an in-memory `NetworkXGraphService`/`InMemoryVectorIndex` wraps a fresh
+  graph/dict), so instead of threading `tenant_id` through every method of both Protocols, each
+  tenant gets its own genuinely separate instance, lazily created on first use. Stronger isolation
+  guarantee than a shared-instance-plus-filter: there's no shared in-memory structure a bug in a
+  filter clause could ever leak across, because there's no shared structure at all.
+
+The API wires this in via `api/dependencies.py`'s `get_current_tenant` — decodes the bearer token's
+`tenant_id` claim when `settings.api_auth_enabled` is on, or returns `settings.default_tenant_id`
+(the whole deployment behaves as one tenant, unchanged from pre-multi-tenancy behavior) when auth is
+off, which is why every pre-existing test that runs with auth disabled needed no changes.
+`tests/integration/test_multi_tenant_isolation.py` proves this end-to-end through the real API with
+two distinct tenant tokens: a statute added under one tenant is invisible to `GET
+/graph/statutes/{id}` (404, not just filtered out), absent from `GET /graph/statutes`, doesn't
+resolve in `/graph/preemption/{entity_id}`, and never surfaces in `/graph/search` — for another
+tenant's token.
+
+**What this still isn't**: there's no user/tenant registration system. `settings.api_client_id`
+remains the one configured demo credential, scoped to `settings.api_client_tenant_id` — the
+isolation *mechanism* works for however many tenants actually have credentials, which is what's
+tested (via directly-minted tokens with different `tenant_id` claims, standing in for a second
+registered client), but there's no API to provision a real second tenant/credential pair yet.
 - **`ui/`** — a Next.js (Pages Router, TypeScript, Tailwind) dashboard: `ProofInspector` (submit a
   clause, see the `ProofResult` and its SMT-LIB2 rendering), `SimulationCard` (deterrence-penalty
   calculator plus an SVG-rendered convex penalty curve), and `GraphViewer` (add a statute, resolve
@@ -203,6 +249,18 @@ covered deterministically instead, by mocking `z3.Solver`'s own `check()`/`reaso
 level (asserts the 400 response, then issues an unmocked follow-up request to prove the process
 itself is unaffected).
 
+**Pushed to 300 concurrent users** (up from 20), no distributed/cloud workers involved — a single
+local Locust process comfortably drives this much load before becoming the bottleneck itself.
+**14,861 requests, 0 failures.** Latency did rise substantially under that much queueing pressure
+(median ~600-1200ms per endpoint, `/graph/statutes` p99≈1.7s) — that's real and worth taking
+seriously, not hidden. What matters is *why*: `/verification/verify`'s actual Z3 solve time
+(`proof_result.elapsed_ms`, checked on every request, not just the HTTP round-trip) never once
+exceeded the 480ms budget, even at this scale. The elevated latency is requests queueing for one of
+`settings.z3_pool_size=4` bounded solver slots, not the solver degrading under load — exactly the
+intended behavior of a bounded-concurrency pool. Still a single `uvicorn` process, not multiple
+worker processes behind a load balancer the way a real production deployment would run — that
+remains untested.
+
 ## Known limitations
 
 Read this before treating any of the above as more finished than it is:
@@ -213,20 +271,25 @@ Read this before treating any of the above as more finished than it is:
   executed yet as of this commit (it will on the next push). Treat "the UI has real, cross-browser-
   configured behavioral test coverage, and it already found and fixed one bug" as established;
   treat "this has run in CI, repeatedly, over time" as not yet true.
-- **Auth is deliberately minimal.** One hardcoded client_id/client_secret pair
-  (`settings.api_client_id`/`api_client_secret`), no user/tenant model, no token revocation, no
-  refresh tokens. Fine for a demo gateway; not what you'd want fronting anything real. Swapping in
-  PyJWT/passlib for the same single-credential check wouldn't change this — real multi-tenant auth
-  needs an actual user/tenant repository and tenant-scoped data isolation, a genuine feature to
-  build deliberately, not a drop-in.
-- **Load testing has been run a few times, at modest scale, on one machine.** Up to 20 concurrent
-  users for 30-45 seconds against every in-memory default backend is real evidence the concurrency
-  fix above holds, that typical request latencies stay well inside budget, and that larger response
-  payloads (a 300-element domain's SMT-LIB2 text) don't change that — it is not evidence of behavior
-  at production scale (hundreds+ concurrent users), under sustained multi-hour load, against the
-  Neo4j/Qdrant/Postgres backends instead of the in-memory defaults, or from multiple load-generating
-  machines instead of one. Treat this as "the obvious concurrency landmine has been found and
-  defused, and the timeout path degrades gracefully," not "this has been capacity-planned."
+- **Auth's credential check is still deliberately minimal; its data-isolation guarantee is not.**
+  As of v1.2.0, `StatuteRepository`/`GraphService`/`VectorIndex` are genuinely tenant-scoped end to
+  end (see "Multi-tenant data isolation" above) — that part is real, not aspirational. What's still
+  missing: one hardcoded client_id/client_secret pair (`settings.api_client_id`/`api_client_secret`),
+  no user/tenant *registration* system to provision a second real credential, no token revocation,
+  no refresh tokens. Fine for a demo gateway credential check; not what you'd want fronting anything
+  real. Swapping in PyJWT/passlib for the same single-credential check still wouldn't address this —
+  what's needed is a user/tenant registry (sign-up, credential issuance, tenant provisioning), which
+  is a genuine feature to build deliberately, not a drop-in.
+- **Load testing has been run a few times, at up to 300 concurrent users, on one machine.** That's
+  real evidence the concurrency fix holds, that the Z3 timeout budget is respected even under heavy
+  queueing, and that larger response payloads don't change that — it is not evidence of behavior at
+  genuine production scale (thousands of concurrent users), under sustained multi-hour load, against
+  the Neo4j/Qdrant/Postgres backends instead of the in-memory defaults, from multiple
+  load-generating machines instead of one, or against multiple `uvicorn` worker processes behind a
+  load balancer instead of the single process every run here used. Treat this as "the obvious
+  concurrency landmine has been found and defused, the timeout path degrades gracefully, and the
+  system holds up to real (if moderate) concurrent load," not "this has been capacity-planned for
+  production."
 - **The "formal verification" and "game-theoretic guarantees" are real math, not legal advice.**
   The EPR compiler and Z3 solver pool genuinely check what you give them; whether a hand-authored
   clause correctly captures what a statute means is a legal-drafting judgment call this system

@@ -5,6 +5,9 @@ from legal_engine.persistence.repository import InMemoryStatuteRepository
 
 pytestmark = pytest.mark.asyncio
 
+TENANT_A = "tenant-a"
+TENANT_B = "tenant-b"
+
 
 def _statute(citation: str = "Sec. 1", **overrides) -> StatuteDocument:
     defaults = {
@@ -22,42 +25,42 @@ class TestInMemoryStatuteRepository:
     async def test_add_and_get_roundtrip(self):
         repo = InMemoryStatuteRepository()
         statute = _statute()
-        await repo.add(statute)
-        assert await repo.get(statute.id) == statute
+        await repo.add(statute, TENANT_A)
+        assert await repo.get(statute.id, TENANT_A) == statute
 
     async def test_get_missing_returns_none(self):
         repo = InMemoryStatuteRepository()
         from uuid import uuid4
 
-        assert await repo.get(uuid4()) is None
+        assert await repo.get(uuid4(), TENANT_A) is None
 
     async def test_list_by_citation(self):
         repo = InMemoryStatuteRepository()
         a = _statute(citation="Sec. 1")
         b = _statute(citation="Sec. 1")
         other = _statute(citation="Sec. 2")
-        await repo.add(a)
-        await repo.add(b)
-        await repo.add(other)
+        await repo.add(a, TENANT_A)
+        await repo.add(b, TENANT_A)
+        await repo.add(other, TENANT_A)
 
-        results = await repo.list_by_citation("Sec. 1")
+        results = await repo.list_by_citation("Sec. 1", TENANT_A)
         assert {s.id for s in results} == {a.id, b.id}
 
     async def test_all_returns_every_statute(self):
         repo = InMemoryStatuteRepository()
         statutes = [_statute(citation=f"Sec. {i}") for i in range(3)]
         for s in statutes:
-            await repo.add(s)
-        assert {s.id for s in await repo.all()} == {s.id for s in statutes}
+            await repo.add(s, TENANT_A)
+        assert {s.id for s in await repo.all(TENANT_A)} == {s.id for s in statutes}
 
     async def test_add_overwrites_existing_id(self):
         repo = InMemoryStatuteRepository()
         statute = _statute(text="original")
-        await repo.add(statute)
+        await repo.add(statute, TENANT_A)
         updated = statute.model_copy(update={"text": "amended"})
-        await repo.add(updated)
-        assert (await repo.get(statute.id)).text == "amended"
-        assert len(await repo.all()) == 1
+        await repo.add(updated, TENANT_A)
+        assert (await repo.get(statute.id, TENANT_A)).text == "amended"
+        assert len(await repo.all(TENANT_A)) == 1
 
     async def test_create_schema_and_close_are_safe_noops(self):
         repo = InMemoryStatuteRepository()
@@ -67,11 +70,69 @@ class TestInMemoryStatuteRepository:
     async def test_applies_to_round_trips(self):
         repo = InMemoryStatuteRepository()
         statute = _statute(applies_to=["entity-a", "entity-b"])
-        await repo.add(statute)
-        assert (await repo.get(statute.id)).applies_to == ["entity-a", "entity-b"]
+        await repo.add(statute, TENANT_A)
+        assert (await repo.get(statute.id, TENANT_A)).applies_to == ["entity-a", "entity-b"]
 
     async def test_applies_to_defaults_to_empty_list(self):
         repo = InMemoryStatuteRepository()
         statute = _statute()
-        await repo.add(statute)
-        assert (await repo.get(statute.id)).applies_to == []
+        await repo.add(statute, TENANT_A)
+        assert (await repo.get(statute.id, TENANT_A)).applies_to == []
+
+
+class TestTenantIsolation:
+    """Proves the actual isolation guarantee documented in
+    persistence/repository.py's module docstring: a statute added under one
+    tenant_id is invisible to every other tenant_id, and a record existing
+    under a different tenant comes back identically to "doesn't exist" —
+    never leaking even the existence of another tenant's data."""
+
+    async def test_get_does_not_leak_across_tenants(self):
+        repo = InMemoryStatuteRepository()
+        statute = _statute()
+        await repo.add(statute, TENANT_A)
+
+        assert await repo.get(statute.id, TENANT_B) is None
+        assert await repo.get(statute.id, TENANT_A) == statute
+
+    async def test_list_by_citation_is_scoped_per_tenant(self):
+        repo = InMemoryStatuteRepository()
+        a = _statute(citation="Shared Citation")
+        b = _statute(citation="Shared Citation")
+        await repo.add(a, TENANT_A)
+        await repo.add(b, TENANT_B)
+
+        assert [s.id for s in await repo.list_by_citation("Shared Citation", TENANT_A)] == [a.id]
+        assert [s.id for s in await repo.list_by_citation("Shared Citation", TENANT_B)] == [b.id]
+
+    async def test_all_is_scoped_per_tenant(self):
+        repo = InMemoryStatuteRepository()
+        a = _statute(citation="Sec. A")
+        b = _statute(citation="Sec. B")
+        await repo.add(a, TENANT_A)
+        await repo.add(b, TENANT_B)
+
+        assert {s.id for s in await repo.all(TENANT_A)} == {a.id}
+        assert {s.id for s in await repo.all(TENANT_B)} == {b.id}
+
+    async def test_same_id_can_exist_independently_under_two_tenants(self):
+        repo = InMemoryStatuteRepository()
+        statute = _statute()
+        a_version = statute.model_copy(update={"text": "tenant a's text"})
+        b_version = statute.model_copy(update={"text": "tenant b's text"})
+        await repo.add(a_version, TENANT_A)
+        await repo.add(b_version, TENANT_B)
+
+        assert (await repo.get(statute.id, TENANT_A)).text == "tenant a's text"
+        assert (await repo.get(statute.id, TENANT_B)).text == "tenant b's text"
+
+    async def test_list_tenant_ids_returns_every_distinct_tenant(self):
+        repo = InMemoryStatuteRepository()
+        await repo.add(_statute(citation="Sec. A"), TENANT_A)
+        await repo.add(_statute(citation="Sec. B"), TENANT_B)
+
+        assert await repo.list_tenant_ids() == sorted([TENANT_A, TENANT_B])
+
+    async def test_list_tenant_ids_empty_when_no_data(self):
+        repo = InMemoryStatuteRepository()
+        assert await repo.list_tenant_ids() == []

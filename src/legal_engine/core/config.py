@@ -72,9 +72,21 @@ class Settings(BaseSettings):
     api_auth_enabled: bool = False
     api_client_id: str = "demo"
     api_client_secret: str = "change-me-in-production"
+    # The one demo credential's tenant. There's still no user/tenant
+    # registration system — this is the single tenant that single
+    # credential's tokens are scoped to — but the *isolation mechanism*
+    # itself (StatuteRepository/GraphService/VectorIndex all keyed by
+    # tenant_id) works for however many tenants actually have credentials,
+    # which is what's tested. See README's "Known limitations".
+    api_client_tenant_id: str = "demo-tenant"
     jwt_secret: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"
     jwt_expires_minutes: int = 60
+
+    # Tenant every request is scoped to when settings.api_auth_enabled is
+    # False (the default) — the whole deployment behaves as one tenant,
+    # unchanged from pre-multi-tenancy behavior.
+    default_tenant_id: str = "default"
 
 
 settings = Settings()

@@ -34,11 +34,11 @@ def _b64url_decode(data: str) -> bytes:
     return base64.urlsafe_b64decode(data + padding)
 
 
-def create_token(subject: str, expires_minutes: int | None = None) -> str:
+def create_token(subject: str, tenant_id: str, expires_minutes: int | None = None) -> str:
     expires_minutes = expires_minutes if expires_minutes is not None else settings.jwt_expires_minutes
     header = {"alg": settings.jwt_algorithm, "typ": "JWT"}
     now = int(time.time())
-    payload = {"sub": subject, "iat": now, "exp": now + expires_minutes * 60}
+    payload = {"sub": subject, "tenant_id": tenant_id, "iat": now, "exp": now + expires_minutes * 60}
 
     header_b64 = _b64url_encode(json.dumps(header, separators=(",", ":")).encode("utf-8"))
     payload_b64 = _b64url_encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
@@ -48,8 +48,10 @@ def create_token(subject: str, expires_minutes: int | None = None) -> str:
     return f"{header_b64}.{payload_b64}.{_b64url_encode(signature)}"
 
 
-def verify_token(token: str) -> str:
-    """Returns the token's subject if valid. Raises InvalidTokenError otherwise."""
+def decode_token(token: str) -> dict:
+    """Returns the token's full validated payload (including any custom
+    claims like ``tenant_id``) if the signature verifies and it hasn't
+    expired. Raises InvalidTokenError otherwise."""
     parts = token.split(".")
     if len(parts) != 3:
         raise InvalidTokenError("Token is not a three-part JWT")
@@ -75,7 +77,24 @@ def verify_token(token: str) -> str:
     if payload.get("exp", 0) < time.time():
         raise InvalidTokenError("Token has expired")
 
+    return payload
+
+
+def verify_token(token: str) -> str:
+    """Returns the token's subject if valid. Raises InvalidTokenError otherwise."""
+    payload = decode_token(token)
     subject = payload.get("sub")
     if not subject:
         raise InvalidTokenError("Token is missing a subject")
     return str(subject)
+
+
+def get_token_tenant(token: str) -> str:
+    """Returns the token's tenant_id claim if valid. Raises
+    InvalidTokenError if the token itself is invalid, or if it's valid but
+    has no tenant_id claim (e.g. a token issued before multi-tenancy)."""
+    payload = decode_token(token)
+    tenant_id = payload.get("tenant_id")
+    if not tenant_id:
+        raise InvalidTokenError("Token is missing a tenant_id claim")
+    return str(tenant_id)

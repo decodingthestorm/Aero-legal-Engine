@@ -37,7 +37,18 @@ class Base(DeclarativeBase):
 class StatuteRecord(Base):
     __tablename__ = "statutes"
 
+    # Composite primary key (tenant_id, id) rather than id alone: two
+    # tenants adding statutes that happen to share the same UUID (via
+    # StatuteDocument.model_copy, or — astronomically unlikely but not
+    # worth relying on — a genuine uuid4 collision) must land as two
+    # independent rows, not one row that the second write's session.merge()
+    # silently overwrites. Deliberately not a field on StatuteDocument
+    # itself: tenant_id is an access-control concern (who owns this record
+    # in our system), not a fact about the statute the way applies_to is —
+    # keeping it off the domain model means the same StatuteDocument shape
+    # works identically regardless of which tenant is asking.
     id: Mapped[UUID] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(primary_key=True, index=True)
     source_type: Mapped[str] = mapped_column(nullable=False)
     jurisdiction_tier: Mapped[int] = mapped_column(nullable=False)
     citation: Mapped[str] = mapped_column(nullable=False, index=True)
@@ -83,9 +94,10 @@ def _to_domain(record: StatuteRecord) -> StatuteDocument:
     )
 
 
-def _from_domain(statute: StatuteDocument) -> StatuteRecord:
+def _from_domain(statute: StatuteDocument, tenant_id: str) -> StatuteRecord:
     return StatuteRecord(
         id=statute.id,
+        tenant_id=tenant_id,
         source_type=statute.source_type.value,
         jurisdiction_tier=statute.jurisdiction_tier.value,
         citation=statute.citation,
@@ -111,27 +123,41 @@ class SqlAlchemyStatuteRepository:
         async with self._engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
 
-    async def add(self, statute: StatuteDocument) -> None:
+    async def add(self, statute: StatuteDocument, tenant_id: str) -> None:
         async with self._session_factory() as session:
-            await session.merge(_from_domain(statute))
+            await session.merge(_from_domain(statute, tenant_id))
             await session.commit()
 
-    async def get(self, statute_id: UUID) -> StatuteDocument | None:
+    async def get(self, statute_id: UUID, tenant_id: str) -> StatuteDocument | None:
         async with self._session_factory() as session:
-            record = await session.get(StatuteRecord, statute_id)
+            # Composite PK lookup, in (id, tenant_id) column-declaration
+            # order. A statute existing under a *different* tenant is a
+            # different primary key entirely, so this returns None for it
+            # identically to a statute that doesn't exist at all — never
+            # confirms even the existence of another tenant's data.
+            record = await session.get(StatuteRecord, (statute_id, tenant_id))
             return _to_domain(record) if record is not None else None
 
-    async def list_by_citation(self, citation: str) -> list[StatuteDocument]:
+    async def list_by_citation(self, citation: str, tenant_id: str) -> list[StatuteDocument]:
         async with self._session_factory() as session:
             result = await session.execute(
-                select(StatuteRecord).where(StatuteRecord.citation == citation)
+                select(StatuteRecord).where(
+                    StatuteRecord.citation == citation, StatuteRecord.tenant_id == tenant_id
+                )
             )
             return [_to_domain(r) for r in result.scalars().all()]
 
-    async def all(self) -> list[StatuteDocument]:
+    async def all(self, tenant_id: str) -> list[StatuteDocument]:
         async with self._session_factory() as session:
-            result = await session.execute(select(StatuteRecord))
+            result = await session.execute(
+                select(StatuteRecord).where(StatuteRecord.tenant_id == tenant_id)
+            )
             return [_to_domain(r) for r in result.scalars().all()]
+
+    async def list_tenant_ids(self) -> list[str]:
+        async with self._session_factory() as session:
+            result = await session.execute(select(StatuteRecord.tenant_id).distinct())
+            return sorted(result.scalars().all())
 
     async def close(self) -> None:
         await self._engine.dispose()

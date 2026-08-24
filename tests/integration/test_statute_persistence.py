@@ -51,10 +51,10 @@ def test_statute_and_graph_state_survive_a_simulated_api_restart(tmp_path, monke
     # `first_run`'s lifespan has now torn down (engine disposed). A fresh
     # TestClient context on the same `app` re-runs the lifespan from
     # scratch — a new SqlAlchemyStatuteRepository pointed at the same file,
-    # standing in for a real process restart. graph_service/vector_index
-    # are freshly-constructed in-memory defaults each time (their own
-    # settings default to in-memory regardless of statute_backend) — this
-    # is exactly the case persistence/hydration.py exists for.
+    # standing in for a real process restart, and a brand new (empty)
+    # TenantIndexRegistry (their own settings default to in-memory regardless
+    # of statute_backend) — this is exactly the case persistence/hydration.py
+    # exists for.
     with TestClient(app) as second_run:
         get_response = second_run.get(f"/graph/statutes/{statute_id}")
         assert get_response.status_code == 200
