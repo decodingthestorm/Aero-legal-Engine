@@ -12,6 +12,7 @@ a StaticPool, which a temp file sidesteps entirely.
 
 from __future__ import annotations
 
+from datetime import datetime
 from uuid import uuid4
 
 import pytest
@@ -75,6 +76,31 @@ class TestSqlAlchemyStatuteRepository:
         await repo.add(statute, TENANT_A)
         fetched = await repo.get(statute.id, TENANT_A)
         assert fetched.geo_boundary is None
+
+    async def test_ingested_at_comes_back_utc_aware(self, repo):
+        """Same round-trip loss _as_utc fixes for UserAccount.created_at:
+        neither SQLite nor Postgres preserves the offset on a plain
+        datetime column, so a value written as UTC-aware came back naive.
+        Nothing asserted on ingested_at before this."""
+        statute = _statute()
+        await repo.add(statute, TENANT_A)
+        fetched = await repo.get(statute.id, TENANT_A)
+        assert fetched.ingested_at.tzinfo is not None
+        assert fetched.ingested_at == statute.ingested_at
+
+    async def test_naive_effective_date_is_left_naive(self, repo):
+        """_as_utc deliberately does *not* touch effective_date: it comes
+        from a parsed source document, so whether it carries a timezone is
+        a fact about the document. Stamping UTC on it would invent
+        information the source never provided."""
+        # DTZ001 (no tzinfo) is the entire point of this test — a source
+        # document that gave a date with no timezone must stay that way.
+        naive = datetime(2024, 1, 1, 12, 0, 0)  # noqa: DTZ001
+        statute = _statute(effective_date=naive)
+        await repo.add(statute, TENANT_A)
+        fetched = await repo.get(statute.id, TENANT_A)
+        assert fetched.effective_date == naive
+        assert fetched.effective_date.tzinfo is None
 
     async def test_applies_to_round_trips(self, repo):
         statute = _statute(applies_to=["entity-a", "entity-b"])

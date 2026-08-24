@@ -20,7 +20,7 @@ be installed.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal, cast
 from uuid import UUID
 
@@ -39,6 +39,31 @@ from legal_engine.core.models import (
 
 class Base(DeclarativeBase):
     pass
+
+
+def _as_utc(value: datetime) -> datetime:
+    """Re-attaches UTC to a timestamp loaded back out of SQL.
+
+    SQLite has no native timestamp type (SQLAlchemy stores ISO strings)
+    and Postgres' ``TIMESTAMP WITHOUT TIME ZONE`` discards the offset, so
+    a value written as UTC-aware comes back *naive* from both. Without
+    this, the same ``GET /auth/members`` response carried an offset under
+    the in-memory user backend and none under the "sql" one, and any
+    comparison against ``datetime.now(UTC)`` would have raised
+    "can't compare offset-naive and offset-aware datetimes".
+
+    Applied only to ``ingested_at``/``created_at``, which are UTC by
+    construction (core/models.py's ``_utcnow``). Deliberately *not*
+    applied to ``effective_date``: that comes from a parsed source
+    document, so whether it carries a timezone is a fact about the
+    document, and stamping UTC onto it would be inventing information.
+
+    ``DateTime(timezone=True)`` was the obvious alternative and is worse
+    here — it makes Postgres return aware datetimes while SQLite still
+    returns naive ones, so the test suite would pass on the backend the
+    behaviour doesn't match.
+    """
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 class StatuteRecord(Base):
@@ -108,7 +133,7 @@ def _to_domain(record: StatuteRecord) -> StatuteDocument:
         source_url=record.source_url,
         effective_date=record.effective_date,
         geo_boundary=geo_boundary,
-        ingested_at=record.ingested_at,
+        ingested_at=_as_utc(record.ingested_at),
         applies_to=json.loads(record.applies_to_json),
     )
 
@@ -220,7 +245,7 @@ def _user_to_domain(record: UserRecord) -> UserAccount:
         password_hash=record.password_hash,
         role=role,
         email_verified=record.email_verified,
-        created_at=record.created_at,
+        created_at=_as_utc(record.created_at),
     )
 
 

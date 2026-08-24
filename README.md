@@ -77,6 +77,14 @@ honestly-flagged gap from the version before it — never a rewrite, always addi
   `.strip()` on it unguarded three lines later; and `municipal.py` passed BeautifulSoup attribute
   values straight to `float()` without accounting for multi-valued attributes returning a list.
 
+- **v1.9.2** — `SqlAlchemyUserRepository` now runs against a real Postgres in CI. It had been
+  SQLite-only since v1.3.0 — `test_postgres_repository.py` covered statutes and nothing else — so
+  `list_by_tenant`/`remove`, which back member management, had never touched the database they'd
+  run against in production. Writing the suite surfaced a round-trip bug neither backend was
+  catching: `created_at`/`ingested_at` went in UTC-aware and came back **naive**, because SQLite has
+  no native timestamp type and Postgres' `TIMESTAMP WITHOUT TIME ZONE` discards the offset. Nothing
+  asserted on either field, so nothing noticed. Fixed at the domain boundary (`_as_utc`).
+
 None of this means "battle-tested production system" — read on for what would still take.
 
 ## What's built
@@ -763,10 +771,12 @@ pip install -e ".[dev,api,workers]"   # api/workers extras needed for the full t
 pytest
 ```
 
-`tests/integration/test_postgres_repository.py` skips itself unless `LEGAL_ENGINE_TEST_POSTGRES_DSN`
-is set (and needs the `postgres` extra installed) — it's what CI's `postgres` job runs against a
-real Postgres service container; there's nothing to configure for the rest of the suite, which
-tests the same repository against SQLite instead.
+`tests/integration/test_postgres_repository.py` and `test_postgres_user_repository.py` skip
+themselves unless `LEGAL_ENGINE_TEST_POSTGRES_DSN` is set (and need the `postgres` extra installed)
+— they're what CI's `postgres` job runs against a real Postgres service container; there's nothing
+to configure for the rest of the suite, which tests the same repositories against SQLite instead.
+Any future SQL-backed store should get an entry in that job too: the user repository was added in
+v1.3.0 and went uncovered there until v1.9.2, running against SQLite alone the whole time.
 
 Three gates run in CI and should be run locally before a commit:
 

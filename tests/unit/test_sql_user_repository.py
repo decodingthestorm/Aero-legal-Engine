@@ -5,6 +5,8 @@ as test_sql_repository.py; see that file's own docstring.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
 from legal_engine.core.models import UserAccount
@@ -120,3 +122,27 @@ class TestSqlAlchemyUserRepository:
         await repo.add(b)
         await repo.remove(a.email)
         assert (await repo.get_by_email(b.email)) is not None
+
+    async def test_created_at_comes_back_utc_aware(self, repo):
+        """SQLite has no native timestamp type and Postgres' TIMESTAMP
+        WITHOUT TIME ZONE discards the offset, so both hand back a *naive*
+        datetime for a value written as UTC-aware. sql_repository._as_utc
+        re-attaches it at the domain boundary. Nothing asserted on
+        created_at before, which is why the loss went unnoticed — the same
+        GET /auth/members response carried an offset under the in-memory
+        backend and none under this one."""
+        user = _user()
+        await repo.add(user)
+
+        fetched = await repo.get_by_email(user.email)
+        assert fetched.created_at.tzinfo is not None
+        assert fetched.created_at == user.created_at
+
+    async def test_created_at_is_comparable_against_an_aware_now(self, repo):
+        """The concrete failure the naive value would have caused:
+        comparing it to datetime.now(UTC) raises TypeError."""
+        user = _user()
+        await repo.add(user)
+
+        fetched = await repo.get_by_email(user.email)
+        assert fetched.created_at <= datetime.now(UTC)

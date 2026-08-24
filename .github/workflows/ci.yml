@@ -90,10 +90,16 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[dev,postgres]"
 
+      # Both SQL-backed repositories. The user repository was added later
+      # and went uncovered here for several releases, so it ran against
+      # SQLite only — including list_by_tenant/remove, which back member
+      # management. Match this pattern for any future SQL-backed store.
       - name: Postgres integration tests
         env:
           LEGAL_ENGINE_TEST_POSTGRES_DSN: postgresql+asyncpg://legal_engine:legal_engine@localhost:5432/legal_engine_test
-        run: pytest tests/integration/test_postgres_repository.py -v
+        run: |
+          pytest tests/integration/test_postgres_repository.py \
+                 tests/integration/test_postgres_user_repository.py -v
 
   ui:
     runs-on: ubuntu-latest

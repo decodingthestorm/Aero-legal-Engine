@@ -131,10 +131,13 @@ class UserAccount(BaseModel):
 
     ``role``: the tenant's original registerer (POST /auth/register) is
     always "owner" — they *are* the one who created it. Someone invited
-    in later (POST /auth/invite -> POST /auth/accept-invite) is always
-    "member". There's no way to change a role or remove a member after
-    the fact yet — the only permission this gates today is who can send
-    further invites (owner-only, api/routes/auth.py's invite endpoint).
+    in later (POST /auth/invite -> POST /auth/accept-invite) starts as
+    "member". Since v1.7.0 an owner can change either (POST
+    /auth/members/{email}/role) or remove a member outright (DELETE
+    /auth/members/{email}), subject to one invariant: a tenant can never
+    be left with zero owners. Owner-only gates today: sending invites,
+    managing members, and revoking the tenant's liability-disclaimer
+    acceptance (POST /legal/revoke).
 
     ``email_verified``: tracked (POST /auth/verify-email flips it) but
     not enforced anywhere yet — no route currently checks it, so treat it
