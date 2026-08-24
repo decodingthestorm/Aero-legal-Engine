@@ -47,10 +47,14 @@ from legal_engine.persistence.user_repository import UserRepository
 def _decode_bearer_token(request: Request) -> dict:
     """Shared by get_current_tenant/require_auth below. Rejects (401): a
     missing/malformed header, a token that fails decode_token's own
-    signature/expiry checks, a refresh token presented here (refresh
-    tokens are only ever redeemed at POST /auth/refresh — never valid as
-    a regular bearer token), or a token whose jti is on record as
-    revoked (compliance/token_ledger.py's TokenLedger)."""
+    signature/expiry checks, a non-access token presented here (refresh/
+    invite/password_reset/etc tokens are only ever redeemed at their own
+    single-purpose endpoint — never valid as a regular bearer token), a
+    token whose jti is on record as revoked, or a token whose family_id
+    is on record as revoked (compliance/token_ledger.py's TokenLedger —
+    the latter is what actually kills a still-unexpired access token
+    whose sibling refresh token was reused by an attacker, not just the
+    reused refresh token itself)."""
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
@@ -69,6 +73,11 @@ def _decode_bearer_token(request: Request) -> dict:
     token_ledger: TokenLedger = request.app.state.token_ledger
     if token_ledger.is_revoked(payload.get("jti", "")):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token has been revoked")
+    if token_ledger.is_family_revoked(payload.get("family_id", "")):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token's session has been revoked (refresh token reuse was detected)",
+        )
 
     return payload
 

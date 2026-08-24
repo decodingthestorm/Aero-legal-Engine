@@ -90,3 +90,55 @@ class TestRevocation:
         client.post("/auth/revoke", json={"token": alice_tokens["access_token"]})
 
         assert _protected_request(client, bob_tokens["access_token"]).status_code == 200
+
+
+class TestRefreshTokenReuseCascadesToTheWholeSession:
+    """The actual property compliance/token_ledger.py's family_id exists
+    for: a single jti's revocation isn't enough to kill a hijacked
+    session on its own — the legitimate holder's already-rotated sibling
+    access token would stay valid on jti-revocation alone. Reusing a
+    spent refresh token has to cascade to the whole family."""
+
+    def test_reuse_revokes_the_access_token_from_the_legitimate_rotation(self, client):
+        original = _register(client, "julia@example.com")
+
+        # The legitimate rotation.
+        legitimate = client.post("/auth/refresh", json={"refresh_token": original["refresh_token"]}).json()
+        assert _protected_request(client, legitimate["access_token"]).status_code == 200
+
+        # An attacker (or a race) reuses the now-spent original refresh token.
+        reuse_attempt = client.post("/auth/refresh", json={"refresh_token": original["refresh_token"]})
+        assert reuse_attempt.status_code == 401
+
+        # The cascade: the *legitimate* access token from the rotation above
+        # — which was never itself revoked or reused — is now rejected too,
+        # because it shares a family with the compromised refresh token.
+        assert _protected_request(client, legitimate["access_token"]).status_code == 401
+
+    def test_reuse_also_prevents_further_refresh_with_the_new_token(self, client):
+        original = _register(client, "kevin@example.com")
+        legitimate = client.post("/auth/refresh", json={"refresh_token": original["refresh_token"]}).json()
+
+        client.post("/auth/refresh", json={"refresh_token": original["refresh_token"]})  # reuse
+
+        blocked = client.post("/auth/refresh", json={"refresh_token": legitimate["refresh_token"]})
+        assert blocked.status_code == 401
+
+    def test_reuse_in_one_users_session_does_not_affect_another_users_session(self, client):
+        laura_tokens = _register(client, "laura@example.com")
+        mike_tokens = _register(client, "mike@example.com")
+
+        client.post("/auth/refresh", json={"refresh_token": laura_tokens["refresh_token"]})
+        client.post("/auth/refresh", json={"refresh_token": laura_tokens["refresh_token"]})  # reuse
+
+        assert _protected_request(client, mike_tokens["access_token"]).status_code == 200
+
+    def test_a_normal_multi_step_refresh_chain_never_triggers_a_false_cascade(self, client):
+        """Refreshing repeatedly and only ever using the newest token
+        (completely normal client behavior) must never be mistaken for
+        reuse."""
+        tokens = _register(client, "nina@example.com")
+        for _ in range(3):
+            tokens = client.post("/auth/refresh", json={"refresh_token": tokens["refresh_token"]}).json()
+
+        assert _protected_request(client, tokens["access_token"]).status_code == 200

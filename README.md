@@ -30,10 +30,14 @@ honestly-flagged gap from the version before it — never a rewrite, always addi
   actual API contracts (verified by introspection, not memory) but not exercised against a live AWS
   account or Vault instance.
 - **v1.3.0** — `POST /auth/register`: real, self-service user/tenant registration (see "User
-  registration & login" below), closing "no user/tenant registration system to provision a second
-  real credential."
+  accounts, tokens & revocation" below), closing "no user/tenant registration system to provision a
+  second real credential."
 - **v1.4.0** — token revocation and refresh-token rotation (`compliance/token_ledger.py`,
   `POST /auth/refresh` + `POST /auth/revoke`), closing the two gaps v1.3.0 deliberately left open.
+- **v1.4.1** — refresh-token reuse now revokes the whole session (`family_id`, shared by every
+  token issued in one login and carried through every rotation), not just the one reused token —
+  closing the gap where a victim's already-rotated access token would otherwise stay valid even
+  after their refresh token was clearly stolen and reused.
 
 None of this means "battle-tested production system" — read on for what would still take.
 
@@ -235,40 +239,49 @@ tenant/credential pair" gap the previous section used to flag. Self-service, not
 
 **Token revocation & refresh rotation**, added in v1.4.0, closing the two gaps the registration work
 deliberately left open. Every issued token carries a `jti` (unique per token — `sub` alone only
-identifies the *user*, not which specific token to revoke) and a `token_type` claim.
+identifies the *user*, not which specific token to revoke), a `token_type` claim, and (since v1.4.1)
+a `family_id` shared by every token issued from one login.
 
 - **`compliance/token_ledger.py`**'s `TokenLedger` — the same WAL-backed-projection pattern
   `ConsentLedger` already proved out: the WAL is the sole source of truth, this is an O(1) index
-  over it (`is_revoked(jti)`, `redeem_refresh_token(jti)`), exactly re-derivable by replaying
-  `wal.entries()` from scratch (`tests/unit/test_token_ledger.py::TestTokenLedgerReplay` proves it,
-  same shape as `ConsentLedger`'s own replay test). No separate "was this jti ever issued" tracking
-  — the JWT signature itself is that proof; nothing downstream needs to query it.
+  over it (`is_revoked(jti)`, `is_family_revoked(family_id)`, `redeem_refresh_token(jti)`), exactly
+  re-derivable by replaying `wal.entries()` from scratch
+  (`tests/unit/test_token_ledger.py::TestTokenLedgerReplay` proves it, same shape as
+  `ConsentLedger`'s own replay test). No separate "was this jti ever issued" tracking — the JWT
+  signature itself is that proof; nothing downstream needs to query it.
 - **`POST /auth/refresh`** — `{refresh_token}`. Redeems a still-valid, not-yet-used refresh token
-  for a new access+refresh pair (rotation: the old refresh token is spent the instant it's used). A
-  *second* attempt to redeem the same refresh token — reuse, a real theft signal — fails closed
-  (401) rather than silently succeeding again. An access token presented here, or a refresh token
-  presented as a regular bearer token elsewhere, is rejected either way (`token_type` is checked in
-  both directions).
+  for a new access+refresh pair (rotation: the old refresh token is spent the instant it's used, and
+  the new pair carries the *same* `family_id` forward). An access token presented here, or a refresh
+  token presented as a regular bearer token elsewhere, is rejected either way (`token_type` is
+  checked in both directions).
 - **`POST /auth/revoke`** — `{token}`. Possession of the token (access *or* refresh) is the
   authorization to revoke it — matches ordinary "logout" semantics, no separate auth check needed.
   A revoked access token is rejected immediately on its very next use, not just once it naturally
   expires (`api/dependencies.py`'s `_decode_bearer_token`, shared by `require_auth`/
   `get_current_tenant`, checks `TokenLedger.is_revoked` on every request when auth is enabled).
+- **Reuse of a spent refresh token now revokes the whole session (v1.4.1), not just that one
+  attempt.** A single jti's revocation was never enough on its own: if an attacker steals a refresh
+  token and redeems it, the *victim* still holds the access token from their own legitimate rotation
+  right before the theft — jti-revocation alone leaves that token valid until it naturally expires.
+  `redeem_refresh_token` detecting reuse now calls `revoke_family(family_id)`, which
+  `_decode_bearer_token` checks on every request — the sibling access token stops working
+  immediately too, not just the reused refresh token. A normal multi-step refresh chain (always
+  using only the newest token, completely ordinary client behavior) never triggers this — only an
+  actual second use of an already-spent token does.
 
 `tests/integration/test_registration_flow.py` proves registration end-to-end: a registered
 account's token works on a protected route, a duplicate email is rejected, a registered user logs
 in via the same `/auth/token` the demo credential uses, two separate registrations get two tenants
 fully isolated from each other (reusing the exact guarantee "Multi-tenant data isolation" above
 proves for directly-minted tokens — this proves it holds for tokens obtained the real way).
-`tests/integration/test_token_lifecycle.py` proves revocation and rotation end-to-end: refresh
-issues a working new access token, reusing the spent refresh token is rejected, revoking a token
-makes it stop working on its very next request, and none of this leaks across two different users'
-tokens.
+`tests/integration/test_token_lifecycle.py` proves revocation and rotation end-to-end, including the
+actual cascade: refresh once, reuse the *old* refresh token (simulating theft), then confirm the
+*new* access token from the legitimate rotation — never itself revoked or reused — is now rejected
+too; a normal 3-step refresh chain that never reuses anything is confirmed to never falsely trigger
+this; none of it leaks across two different users' sessions.
 
-**What this still isn't**: refresh-token reuse fails closed for *that* token, but doesn't cascade to
-revoke every other outstanding token for the same user — a real session-wide "this looks like theft"
-response is real added scope not built here. There's still no inviting a second user into an
-existing tenant, no roles/permissions, no password reset or email verification flow.
+**What this still isn't**: there's still no inviting a second user into an existing tenant, no
+roles/permissions, no password reset or email verification flow.
 
 ### Liability disclaimer & consent
 
@@ -459,15 +472,15 @@ Read this before treating any of the above as more finished than it is:
   executed yet as of this commit (it will on the next push). Treat "the UI has real, cross-browser-
   configured behavioral test coverage, and it already found and fixed one bug" as established;
   treat "this has run in CI, repeatedly, over time" as not yet true.
-- **Registration, revocation, and refresh rotation are all real now; account management still
-  isn't.** As of v1.2.0, `StatuteRepository`/`GraphService`/`VectorIndex` are genuinely tenant-scoped
-  end to end; as of v1.3.0, `POST /auth/register` provisions genuine, independent tenant/credential
-  pairs; as of v1.4.0, a leaked or stolen access token can actually be revoked (not just wait out its
-  `settings.jwt_expires_minutes` expiry), and refresh tokens are genuinely redeemable, single-use,
-  rotating (see "User accounts, tokens & revocation" above for all three) — none of that
-  aspirational. What's still missing: refresh-token reuse fails closed for *that* token but doesn't
-  cascade to revoke a whole session, no inviting a second user into an existing tenant, no
-  roles/permissions, no password reset or email verification flow.
+- **Registration, revocation, refresh rotation, and reuse-detection are all real now; account
+  management still isn't.** As of v1.2.0, `StatuteRepository`/`GraphService`/`VectorIndex` are
+  genuinely tenant-scoped end to end; as of v1.3.0, `POST /auth/register` provisions genuine,
+  independent tenant/credential pairs; as of v1.4.0, a leaked or stolen access token can actually be
+  revoked (not just wait out its `settings.jwt_expires_minutes` expiry), and refresh tokens are
+  genuinely redeemable, single-use, rotating; as of v1.4.1, reusing a spent refresh token revokes the
+  whole session, not just that one token (see "User accounts, tokens & revocation" above for all
+  four) — none of that aspirational. What's still missing: no inviting a second user into an existing
+  tenant, no roles/permissions, no password reset or email verification flow.
 - **The liability-disclaimer consent record is real (tamper-evident, tied to a server-verified
   token subject, tenant-scoped, and — since `ConsentLedger` — an O(1) indexed lookup rather than a
   WAL scan) but its supporting infrastructure is still minimal.** The WAL's signing key is a

@@ -46,12 +46,21 @@ from legal_engine.core.models import UserAccount
 router = APIRouter()
 
 
-def _issue_token_pair(subject: str, tenant_id: str) -> tuple[str, str]:
-    access_token = create_token(subject=subject, tenant_id=tenant_id)
+def _issue_token_pair(subject: str, tenant_id: str, family_id: str | None = None) -> tuple[str, str]:
+    """A fresh login (POST /auth/register, /auth/token) calls this with no
+    family_id — a new session, new family. POST /auth/refresh calls it
+    with the *old* refresh token's family_id, so the rotated pair stays
+    in the same family (see compliance/token_ledger.py for why that's
+    what lets a reuse-detected rotation cascade-revoke the sibling access
+    token too, not just the reused refresh token)."""
+    if family_id is None:
+        family_id = str(uuid4())
+    access_token = create_token(subject=subject, tenant_id=tenant_id, family_id=family_id)
     refresh_token = create_token(
         subject=subject,
         tenant_id=tenant_id,
         token_type="refresh",
+        family_id=family_id,
         expires_minutes=settings.refresh_token_expires_days * 24 * 60,
     )
     return access_token, refresh_token
@@ -152,14 +161,17 @@ async def refresh(request: RefreshRequest, token_ledger: TokenLedgerDep) -> Toke
     if payload.get("token_type") != "refresh":
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not a refresh token")
 
-    subject, tenant_id, jti = payload.get("sub", ""), payload.get("tenant_id", ""), payload.get("jti", "")
-    if not token_ledger.redeem_refresh_token(jti, tenant_id):
+    subject = payload.get("sub", "")
+    tenant_id = payload.get("tenant_id", "")
+    jti = payload.get("jti", "")
+    family_id = payload.get("family_id", "")
+    if not token_ledger.redeem_refresh_token(jti, tenant_id, family_id):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Refresh token has already been used or revoked",
         )
 
-    access_token, new_refresh_token = _issue_token_pair(subject, tenant_id)
+    access_token, new_refresh_token = _issue_token_pair(subject, tenant_id, family_id=family_id)
     return TokenResponse(
         access_token=access_token, refresh_token=new_refresh_token, expires_in_minutes=settings.jwt_expires_minutes
     )

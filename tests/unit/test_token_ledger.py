@@ -7,6 +7,8 @@ from legal_engine.core.wal import WriteAheadLog
 
 TENANT_A = "tenant-a"
 TENANT_B = "tenant-b"
+FAMILY_A = "family-a"
+FAMILY_B = "family-b"
 
 
 @pytest.fixture
@@ -48,24 +50,59 @@ class TestRevocation:
 
 class TestRefreshTokenRedemption:
     def test_redeeming_an_unused_token_succeeds(self, ledger):
-        assert ledger.redeem_refresh_token("refresh-jti-1", TENANT_A) is True
+        assert ledger.redeem_refresh_token("refresh-jti-1", TENANT_A, FAMILY_A) is True
 
     def test_redeeming_the_same_token_twice_fails_the_second_time(self, ledger):
-        assert ledger.redeem_refresh_token("refresh-jti-1", TENANT_A) is True
-        assert ledger.redeem_refresh_token("refresh-jti-1", TENANT_A) is False
-
-    def test_reuse_attempt_does_not_record_a_new_wal_entry(self, wal, ledger):
-        ledger.redeem_refresh_token("refresh-jti-1", TENANT_A)
-        ledger.redeem_refresh_token("refresh-jti-1", TENANT_A)  # reuse — should be a no-op
-        assert len(wal.entries()) == 1
+        assert ledger.redeem_refresh_token("refresh-jti-1", TENANT_A, FAMILY_A) is True
+        assert ledger.redeem_refresh_token("refresh-jti-1", TENANT_A, FAMILY_A) is False
 
     def test_a_revoked_jti_cannot_be_redeemed(self, ledger):
         ledger.revoke("refresh-jti-1", TENANT_A)
-        assert ledger.redeem_refresh_token("refresh-jti-1", TENANT_A) is False
+        assert ledger.redeem_refresh_token("refresh-jti-1", TENANT_A, FAMILY_A) is False
 
     def test_redemption_does_not_affect_other_jtis(self, ledger):
-        ledger.redeem_refresh_token("refresh-jti-1", TENANT_A)
-        assert ledger.redeem_refresh_token("refresh-jti-2", TENANT_A) is True
+        ledger.redeem_refresh_token("refresh-jti-1", TENANT_A, FAMILY_A)
+        assert ledger.redeem_refresh_token("refresh-jti-2", TENANT_A, FAMILY_A) is True
+
+    def test_a_family_revoked_token_cannot_be_redeemed(self, ledger):
+        ledger.revoke_family(FAMILY_A, TENANT_A)
+        assert ledger.redeem_refresh_token("refresh-jti-1", TENANT_A, FAMILY_A) is False
+
+
+class TestFamilyRevocationOnReuse:
+    """The actual point of family_id existing: a single jti's revocation
+    isn't enough to kill a hijacked session (the victim's already-rotated
+    sibling access token would stay valid on jti-revocation alone) — reuse
+    of a spent refresh token has to cascade to the whole family."""
+
+    def test_first_redemption_does_not_revoke_the_family(self, ledger):
+        ledger.redeem_refresh_token("refresh-jti-1", TENANT_A, FAMILY_A)
+        assert ledger.is_family_revoked(FAMILY_A) is False
+
+    def test_reuse_revokes_the_whole_family(self, ledger):
+        ledger.redeem_refresh_token("refresh-jti-1", TENANT_A, FAMILY_A)
+        ledger.redeem_refresh_token("refresh-jti-1", TENANT_A, FAMILY_A)  # reuse
+        assert ledger.is_family_revoked(FAMILY_A) is True
+
+    def test_reuse_in_one_family_does_not_revoke_a_different_family(self, ledger):
+        ledger.redeem_refresh_token("refresh-jti-1", TENANT_A, FAMILY_A)
+        ledger.redeem_refresh_token("refresh-jti-1", TENANT_A, FAMILY_A)  # reuse in FAMILY_A
+        assert ledger.is_family_revoked(FAMILY_B) is False
+
+    def test_family_revocation_blocks_a_different_jti_in_the_same_family(self, ledger):
+        """The real cascade property: revoking the family blocks *every*
+        jti tagged with it, not just the one that was reused."""
+        ledger.redeem_refresh_token("refresh-jti-1", TENANT_A, FAMILY_A)
+        ledger.redeem_refresh_token("refresh-jti-1", TENANT_A, FAMILY_A)  # reuse -> revokes FAMILY_A
+        assert ledger.redeem_refresh_token("refresh-jti-2", TENANT_A, FAMILY_A) is False
+
+    def test_explicit_family_revocation_is_tamper_evident(self, wal, ledger):
+        ledger.revoke_family(FAMILY_A, TENANT_A)
+        wal.verify()  # should not raise
+
+        wal.entries()[0].payload["family_id"] = FAMILY_B  # forge the revocation onto a different family
+        with pytest.raises(WALIntegrityError, match="payload_hash"):
+            wal.verify()
 
 
 class TestTokenLedgerReplay:
@@ -84,17 +121,26 @@ class TestTokenLedgerReplay:
 
     def test_replay_reconstructs_redeemed_refresh_token_state(self):
         wal = WriteAheadLog(generate_signing_key())
-        TokenLedger(wal).redeem_refresh_token("refresh-jti-1", TENANT_A)
+        TokenLedger(wal).redeem_refresh_token("refresh-jti-1", TENANT_A, FAMILY_A)
 
         replayed = TokenLedger(wal)
-        assert replayed.redeem_refresh_token("refresh-jti-1", TENANT_A) is False  # already redeemed
+        assert replayed.redeem_refresh_token("refresh-jti-1", TENANT_A, FAMILY_A) is False  # already redeemed
+
+    def test_replay_reconstructs_family_revoked_state(self):
+        wal = WriteAheadLog(generate_signing_key())
+        original = TokenLedger(wal)
+        original.redeem_refresh_token("refresh-jti-1", TENANT_A, FAMILY_A)
+        original.redeem_refresh_token("refresh-jti-1", TENANT_A, FAMILY_A)  # reuse -> revokes FAMILY_A
+
+        replayed = TokenLedger(wal)
+        assert replayed.is_family_revoked(FAMILY_A) is True
 
     def test_replay_reconstructs_multiple_tenants_independently(self):
         wal = WriteAheadLog(generate_signing_key())
         original = TokenLedger(wal)
         original.revoke("jti-a", TENANT_A)
-        original.redeem_refresh_token("refresh-jti-b", TENANT_B)
+        original.redeem_refresh_token("refresh-jti-b", TENANT_B, FAMILY_B)
 
         replayed = TokenLedger(wal)
         assert replayed.is_revoked("jti-a") is True
-        assert replayed.redeem_refresh_token("refresh-jti-b", TENANT_B) is False
+        assert replayed.redeem_refresh_token("refresh-jti-b", TENANT_B, FAMILY_B) is False

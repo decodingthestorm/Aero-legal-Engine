@@ -83,16 +83,25 @@ def create_token(
     expires_minutes: int | None = None,
     token_type: str = "access",
     jti: str | None = None,
+    family_id: str | None = None,
 ) -> str:
     """``jti`` (JWT ID) is auto-generated (uuid4) unless given explicitly —
     it's what a per-token revocation/redemption record (see
     compliance/token_ledger.py) is keyed on, since ``sub`` alone only
     identifies the *user*, not this specific token. ``token_type``
-    distinguishes a normal bearer ("access") token from a refresh token —
-    api/dependencies.py's require_auth rejects a refresh token presented
-    as a bearer token, since the two are meant for entirely different
-    endpoints (refresh tokens are only ever redeemed at POST
-    /auth/refresh)."""
+    distinguishes a normal bearer ("access") token from a refresh (or
+    invite/password_reset/email_verification) token — api/dependencies.py's
+    require_auth rejects anything but an "access" token presented as a
+    bearer token, since every other type is meant for exactly one
+    single-purpose endpoint (refresh tokens at POST /auth/refresh, etc).
+
+    ``family_id`` is also auto-generated (uuid4) unless given explicitly —
+    every access+refresh pair issued together shares one (see
+    api/routes/auth.py's _issue_token_pair), carried forward unchanged
+    through every POST /auth/refresh rotation. Reusing an already-redeemed
+    refresh token revokes the whole family, not just that one jti — see
+    compliance/token_ledger.py's revoke_family for why a single jti isn't
+    enough to actually kill a hijacked session."""
     expires_minutes = expires_minutes if expires_minutes is not None else settings.jwt_expires_minutes
     header = {"alg": settings.jwt_algorithm, "typ": "JWT"}
     now = int(time.time())
@@ -101,6 +110,7 @@ def create_token(
         "tenant_id": tenant_id,
         "jti": jti if jti is not None else str(uuid4()),
         "token_type": token_type,
+        "family_id": family_id if family_id is not None else str(uuid4()),
         "iat": now,
         "exp": now + expires_minutes * 60,
     }
