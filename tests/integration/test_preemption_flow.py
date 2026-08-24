@@ -9,10 +9,16 @@ build: none of these modules is interesting used in isolation.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from legal_engine.core.models import JurisdictionTier, SourceType, StatuteDocument
 from legal_engine.knowledge_graph.embeddings import HashingEmbedder
 from legal_engine.knowledge_graph.graph_service import NetworkXGraphService
-from legal_engine.knowledge_graph.preemption import resolve_all, resolve_preemption_for_entity
+from legal_engine.knowledge_graph.preemption import (
+    ResolutionPrinciple,
+    resolve_all,
+    resolve_preemption_for_entity,
+)
 from legal_engine.knowledge_graph.vector_service import InMemoryVectorIndex
 
 
@@ -92,6 +98,43 @@ class TestPreemptionFlow:
         assert result.governing is None
         assert result.conflicting_tier == JurisdictionTier.MUNICIPAL
         assert graph.preemption_edges() == []
+
+    def test_same_tier_conflict_resolved_by_specialis_adds_edges(self):
+        """The counterpart to the review case above: when lex specialis
+        does separate two same-tier statutes, the graph gets the
+        preemption edge that a review result deliberately withholds."""
+        narrow = _statute("Muni Narrow", JurisdictionTier.MUNICIPAL, "narrow text")
+        broad = _statute("Muni Broad", JurisdictionTier.MUNICIPAL, "broad text")
+
+        graph = NetworkXGraphService()
+        entity_id = "loading_dock_hours"
+        graph.add_statute(narrow, applies_to=[entity_id])
+        graph.add_statute(broad, applies_to=[entity_id, "street_parking_hours"])
+
+        result = resolve_preemption_for_entity(graph, entity_id)
+
+        assert result.governing.id == narrow.id
+        assert result.resolved_by is ResolutionPrinciple.LEX_SPECIALIS
+        assert graph.preemption_edges() == [(narrow.id, broad.id)]
+
+    def test_same_tier_conflict_resolved_by_posterior(self):
+        """Identical scopes, so specialis is silent and the later
+        enactment governs."""
+        older = _statute("Muni 2019", JurisdictionTier.MUNICIPAL, "older text")
+        newer = _statute("Muni 2024", JurisdictionTier.MUNICIPAL, "newer text")
+        older = older.model_copy(update={"effective_date": datetime(2019, 1, 1, tzinfo=UTC)})
+        newer = newer.model_copy(update={"effective_date": datetime(2024, 1, 1, tzinfo=UTC)})
+
+        graph = NetworkXGraphService()
+        entity_id = "noise_curfew"
+        graph.add_statute(older, applies_to=[entity_id])
+        graph.add_statute(newer, applies_to=[entity_id])
+
+        result = resolve_preemption_for_entity(graph, entity_id)
+
+        assert result.governing.id == newer.id
+        assert result.resolved_by is ResolutionPrinciple.LEX_POSTERIOR
+        assert [s.id for s in result.preempted] == [older.id]
 
     def test_resolve_all_covers_every_entity_in_the_graph(self):
         graph = NetworkXGraphService()

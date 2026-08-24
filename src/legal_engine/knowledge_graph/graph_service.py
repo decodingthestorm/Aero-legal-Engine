@@ -38,6 +38,8 @@ class GraphService(Protocol):
 
     def statutes_for_entity(self, entity_id: str) -> list[StatuteDocument]: ...
 
+    def entities_for_statute(self, statute_id: UUID) -> list[str]: ...
+
     def add_preemption_edge(self, higher_id: UUID, lower_id: UUID) -> None: ...
 
     def preemption_edges(self) -> list[tuple[UUID, UUID]]: ...
@@ -56,7 +58,7 @@ class NetworkXGraphService:
         self._graph.add_node(statute_node, kind="statute", statute=statute)
         for entity_id in applies_to:
             entity_node = _entity_node_id(entity_id)
-            self._graph.add_node(entity_node, kind="entity")
+            self._graph.add_node(entity_node, kind="entity", entity_id=entity_id)
             self._graph.add_edge(statute_node, entity_node, relation="applies_to")
 
     def get_statute(self, statute_id: UUID) -> StatuteDocument:
@@ -74,6 +76,23 @@ class NetworkXGraphService:
             if self._graph.nodes[predecessor].get("kind") == "statute":
                 statutes.append(self._graph.nodes[predecessor]["statute"])
         return statutes
+
+    def entities_for_statute(self, statute_id: UUID) -> list[str]:
+        """The inverse of statutes_for_entity: which entities this statute
+        applies to *according to the graph*. Deliberately not read off
+        StatuteDocument.applies_to — add_statute takes applies_to as a
+        separate argument and never reconciles the two, so the field and
+        the edges can legitimately disagree. Anything reasoning about a
+        statute's scope has to use the same relation that produced the
+        candidate set (see knowledge_graph/preemption.py)."""
+        statute_node = _statute_node_id(statute_id)
+        if statute_node not in self._graph:
+            return []
+        return [
+            self._graph.nodes[successor].get("entity_id", "")
+            for successor in self._graph.successors(statute_node)
+            if self._graph.nodes[successor].get("kind") == "entity"
+        ]
 
     def add_preemption_edge(self, higher_id: UUID, lower_id: UUID) -> None:
         higher_node = _statute_node_id(higher_id)
@@ -135,6 +154,11 @@ class Neo4jGraphService:
     def statutes_for_entity(self, entity_id: str) -> list[StatuteDocument]:
         raise NotImplementedError(
             "Neo4jGraphService.statutes_for_entity: implement once schema is final"
+        )
+
+    def entities_for_statute(self, statute_id: UUID) -> list[str]:
+        raise NotImplementedError(
+            "Neo4jGraphService.entities_for_statute: implement once schema is final"
         )
 
     def add_preemption_edge(self, higher_id: UUID, lower_id: UUID) -> None:

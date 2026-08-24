@@ -23,7 +23,10 @@ from legal_engine.api.dependencies import (
     VectorIndexDep,
 )
 from legal_engine.core.models import JurisdictionTier, SourceType, StatuteDocument
-from legal_engine.knowledge_graph.preemption import resolve_preemption_for_entity
+from legal_engine.knowledge_graph.preemption import (
+    ResolutionPrinciple,
+    resolve_preemption_for_entity,
+)
 
 router = APIRouter()
 
@@ -90,6 +93,15 @@ class PreemptionResponse(BaseModel):
     preempted_citations: list[str]
     requires_review: bool
     conflicting_tier: JurisdictionTier | None
+    # Which maxim decided it. Worth surfacing rather than keeping internal:
+    # a lex_superior answer is a fact about the jurisdictional hierarchy,
+    # while lex_specialis rests on the applies_to proxy (see
+    # knowledge_graph/preemption.py), so a client showing this to a lawyer
+    # needs to be able to weight them differently.
+    resolved_by: ResolutionPrinciple | None
+    # Populated only when requires_review is True: the statutes that tied
+    # and which no principle separated.
+    unresolved_citations: list[str]
 
 
 @router.get("/preemption/{entity_id}", response_model=PreemptionResponse)
@@ -101,6 +113,8 @@ async def get_preemption(entity_id: str, graph_service: GraphServiceDep) -> Pree
         preempted_citations=[s.citation for s in result.preempted],
         requires_review=result.requires_review,
         conflicting_tier=result.conflicting_tier,
+        resolved_by=result.resolved_by,
+        unresolved_citations=[s.citation for s in result.unresolved_candidates],
     )
 
 

@@ -101,6 +101,14 @@ honestly-flagged gap from the version before it — never a rewrite, always addi
   "linear-quadratic" claim implies — resolving its demand for LQ structure *and* viscosity solutions
   by making the closed form the solver's test oracle rather than its competitor.
 
+- **v1.12.0** — statutory conflict resolution beyond Article VI. `preemption.py` used to give up
+  whenever two statutes tied at the same `JurisdictionTier`, which is correct for the Supremacy
+  Clause but leaves the commonest real conflict unresolved. It now applies **lex specialis** (the
+  narrower rule wins) and then **lex posterior** (the later rule wins, only where scopes are
+  identical), reports *which* maxim decided via `resolved_by`, and names the statutes still in
+  contention via `unresolved_candidates`. Prompted by a research plan whose defeasibility track
+  correctly identified this gap.
+
 None of this means "battle-tested production system" — read on for what would still take.
 
 ## What's built
@@ -599,6 +607,59 @@ one of those "optional" dependencies turned out to already be installed in a bro
 git history on `knowledge_graph/embeddings.py` for what that surfaced). `api` and `workers` are
 deployment-role extras (a library-only user shouldn't need FastAPI or Celery pulled in) rather
 than lazy-backend extras; CI installs both to cover their tests.
+
+### Statutory conflict resolution
+
+Extended in v1.12.0 (`knowledge_graph/preemption.py`). Three maxims in lexical order, each seeing
+only what the ones before it couldn't decide:
+
+1. **Lex superior** — higher authority wins, by `JurisdictionTier`. This is Article VI, and it is
+   *first*: a general federal statute beats a specific municipal one even though lex specialis
+   alone would say the opposite.
+2. **Lex specialis** — the narrower rule wins. A defeats B when `scope(A)` is a strict subset of
+   `scope(B)`.
+3. **Lex posterior** — the later rule wins, **only where scopes are identical**. That restriction
+   is the doctrine, not a shortcut: a newer statute about partly different subject matter sits
+   alongside the old one rather than replacing it.
+
+The handoff between 2 and 3 falls out of the scope relation instead of needing a rule of its own —
+strictly narrower means specialis decides, equal means specialis is silent and posterior decides,
+merely overlapping means both are silent and it stays unresolved. Ordering specialis before
+posterior follows *lex posterior generalis non derogat legi priori speciali*; it's a jurisprudential
+choice with real backing, not a mathematical necessity, and the module says so.
+
+For three or more candidates the winner is the unique **undefeated** statute. "Undefeated" is about
+surviving, not winning: a statute whose scope merely overlaps every rival defeats nothing and is
+defeated by nothing, and it still blocks resolution. Testing "defeats something" instead would hand
+the conflict to whichever statute happened to beat a *different* rival — that was a real bug in the
+first draft, and `test_an_undefeated_rival_blocks_resolution` exists because of it.
+
+`resolved_by` is on every result because a system that says "X governs" without saying *why* isn't
+auditable — and the three maxims don't carry equal weight here. A `lex_superior` answer is a fact
+about the jurisdictional hierarchy; a `lex_specialis` one rests on a proxy.
+
+**About that proxy.** Scope is the set of entities a statute is linked to *in the graph*. That's
+sound — a strict subset really is a narrower scope of application — but not complete: two statutes
+can both apply to `{commercial-trucks}` while one governs, by its text, only those carrying
+hazardous materials. Nothing in the entity model represents that, so this reports "no specificity
+relation" where a lawyer sees an obvious one. The error runs toward **under-deciding and deferring
+to review**, which is the right bias for a tool whose job is surfacing conflicts — but an
+unresolved result is weak evidence that no specificity relation exists.
+
+Scope comes from `GraphService.entities_for_statute` (added in this version) rather than from
+`StatuteDocument.applies_to`. Those can legitimately disagree: `add_statute` takes `applies_to` as a
+separate argument and never reconciles it with the field, and the candidate set comes from walking
+the edges. Reading the field while selecting by edges compares two different relations, and fails
+quietly — documents with an empty field all look equal-scoped, collapsing every conflict to
+posterior or to review. The existing integration suite contained exactly that divergence, which is
+how it was caught.
+
+**What this still isn't**: it decides which statute wins once a candidate set is known. Whether two
+statutes tied to the same entity actually contradict each other is a separate question — that's
+`formal_logic/` (are their compiled clauses jointly UNSAT) or vector similarity surfacing a
+candidate. Nothing here reaches into `deontic/`: a lex specialis exception is structurally a default
+refined by an exception, which is what System E models, but that's a resemblance between layers, not
+a dependency, and wiring them would couple two independent modules with no caller needing it.
 
 ### Deontic reasoning
 

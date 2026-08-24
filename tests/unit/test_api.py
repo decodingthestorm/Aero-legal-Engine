@@ -289,6 +289,59 @@ class TestGraphRoutes:
         assert data["governing_citation"] == "State 65.850"
         assert data["preempted_citations"] == ["Muni 12.04"]
         assert data["requires_review"] is False
+        assert data["resolved_by"] == "lex_superior"
+        assert data["unresolved_citations"] == []
+
+    def test_preemption_resolved_by_lex_specialis_over_the_api(self, client):
+        """Two same-tier statutes where one has the narrower applies_to
+        scope — Article VI can't separate them, lex specialis can."""
+        for citation, applies_to in [
+            ("Muni Narrow", ["fleet-trucks"]),
+            ("Muni Broad", ["fleet-trucks", "fleet-vans"]),
+        ]:
+            client.post(
+                "/graph/statutes",
+                json={
+                    "source_type": "municipal_code",
+                    "jurisdiction_tier": 4,
+                    "citation": citation,
+                    "title": citation,
+                    "text": "text",
+                    "applies_to": applies_to,
+                },
+            )
+
+        data = client.get("/graph/preemption/fleet-trucks").json()
+
+        assert data["governing_citation"] == "Muni Narrow"
+        assert data["resolved_by"] == "lex_specialis"
+        assert data["requires_review"] is False
+
+    def test_preemption_reports_unresolved_candidates_over_the_api(self, client):
+        """Overlapping-but-not-nested scopes leave the conflict open, and
+        the response has to name which statutes are in it."""
+        for citation, applies_to in [
+            ("Muni Left", ["depot-a", "depot-b"]),
+            ("Muni Right", ["depot-a", "depot-c"]),
+        ]:
+            client.post(
+                "/graph/statutes",
+                json={
+                    "source_type": "municipal_code",
+                    "jurisdiction_tier": 4,
+                    "citation": citation,
+                    "title": citation,
+                    "text": "text",
+                    "applies_to": applies_to,
+                },
+            )
+
+        data = client.get("/graph/preemption/depot-a").json()
+
+        assert data["requires_review"] is True
+        assert data["governing_citation"] is None
+        assert data["resolved_by"] is None
+        assert sorted(data["unresolved_citations"]) == ["Muni Left", "Muni Right"]
 
     def test_preemption_for_unknown_entity(self, client):
         response = client.get("/graph/preemption/does-not-exist")
