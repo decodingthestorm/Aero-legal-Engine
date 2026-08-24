@@ -104,6 +104,36 @@ class TestVerificationRoute:
         # fails compile_epr_formula's own check -> our 400 handler, not 422.
         assert response.status_code == 400
 
+    def test_solver_timeout_degrades_gracefully_and_server_stays_up(self, client, monkeypatch):
+        """A genuine Z3 timeout under load shouldn't crash the process or
+        wedge the event loop for other requests — it should come back as a
+        clean 400 like any other domain error, and the server keeps serving
+        traffic normally afterward. Z3 itself is too fast to reliably force
+        this organically (see test_formal_logic.py's TestSolverPoolTimeout
+        docstring for what was actually tried), so this mocks z3.Solver
+        directly, same technique."""
+        import z3
+
+        monkeypatch.setattr(z3.Solver, "check", lambda self: z3.unknown)
+        monkeypatch.setattr(z3.Solver, "reason_unknown", lambda self: "timeout")
+
+        body = {
+            "forall_vars": ["x"],
+            "domain": ["alice", "bob"],
+            "matrix": {"kind": "atom", "predicate": "Owns", "args": [{"kind": "variable", "name": "x"}]},
+        }
+        response = client.post("/verification/verify", json=body)
+        assert response.status_code == 400
+        assert response.json()["error"] == "SolverTimeoutError"
+
+        # The mock is scoped to this test only (monkeypatch reverts after);
+        # a normal request right after the "timeout" should succeed as if
+        # nothing happened, proving the process itself is unaffected.
+        monkeypatch.undo()
+        follow_up = client.post("/verification/verify", json=body)
+        assert follow_up.status_code == 200
+        assert follow_up.json()["proof_result"]["satisfiable"] is True
+
 
 class TestSimulationRoutes:
     def test_compute_penalty(self, client):

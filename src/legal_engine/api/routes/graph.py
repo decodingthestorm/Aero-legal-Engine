@@ -55,6 +55,7 @@ async def add_statute(
         citation=request.citation,
         title=request.title,
         text=request.text,
+        applies_to=request.applies_to,
     )
     graph_service.add_statute(statute, applies_to=request.applies_to)
     vector_index.upsert(statute.id, embedder.embed(statute.text), {"citation": statute.citation})

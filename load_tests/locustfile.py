@@ -14,6 +14,18 @@ heaviest endpoint (routes through the Z3 solver pool, bounded to
 settings.z3_pool_size concurrent solves and a settings.z3_timeout_ms=480ms
 budget per solve) and gets proportionally more traffic, since it's the one
 most likely to reveal a concurrency bottleneck the others won't.
+
+``verify_large_domain_clause`` deliberately does NOT try to trip the 480ms
+timeout — an empirical check (see tests/unit/test_formal_logic.py's
+TestSolverPoolTimeout docstring) found that Z3's EPR handling is fast
+enough that even a domain of 800 elements with 3 quantified variables (a
+formula that would need 512M naive ground instantiations) still solved in
+~15ms; it isn't doing brute-force grounding, and organically slow EPR
+instances are a research-level construction problem, not a quick script.
+What a larger domain *does* still exercise, for real: JSON payload/response
+size scaling under concurrent load (the SMT-LIB2 response text grows with
+domain size — see smt_generator.py — since it declares one datatype
+constructor per domain element).
 """
 
 from __future__ import annotations
@@ -24,14 +36,14 @@ import uuid
 from locust import HttpUser, between, task
 
 _DOMAIN = [f"actor_{i}" for i in range(8)]
+_LARGE_DOMAIN = [f"actor_{i}" for i in range(300)]
 
 
-def _verify_clause_body() -> dict:
-    """forall x. Owns(x) -> Reports(x) over an 8-element domain — small
-    enough to solve quickly, large enough to be a non-trivial EPR check."""
+def _ownership_implies_reporting_body(domain: list[str]) -> dict:
+    """forall x. Owns(x) -> Reports(x) over the given domain."""
     return {
         "forall_vars": ["x"],
-        "domain": _DOMAIN,
+        "domain": domain,
         "matrix": {
             "kind": "implies",
             "antecedent": {"kind": "atom", "predicate": "Owns", "args": [{"kind": "variable", "name": "x"}]},
@@ -50,7 +62,10 @@ class GatewayUser(HttpUser):
     @task(3)
     def verify_clause(self):
         with self.client.post(
-            "/verification/verify", json=_verify_clause_body(), catch_response=True
+            "/verification/verify",
+            json=_ownership_implies_reporting_body(_DOMAIN),
+            catch_response=True,
+            name="/verification/verify [small domain]",
         ) as response:
             if response.status_code != 200:
                 response.failure(f"unexpected status {response.status_code}")
@@ -60,6 +75,22 @@ class GatewayUser(HttpUser):
             # this is what settings.z3_timeout_ms is actually bounding.
             if elapsed_ms > 480:
                 response.failure(f"Z3 solve took {elapsed_ms:.0f}ms, over the 480ms budget")
+
+    @task(1)
+    def verify_large_domain_clause(self):
+        """Not expected to approach the timeout (see module docstring) -
+        this exercises response payload size under load instead: a
+        300-element domain means smt_lib2 declares 300 datatype
+        constructors, a meaningfully larger response body than the
+        small-domain task's."""
+        with self.client.post(
+            "/verification/verify",
+            json=_ownership_implies_reporting_body(_LARGE_DOMAIN),
+            catch_response=True,
+            name="/verification/verify [large domain]",
+        ) as response:
+            if response.status_code != 200:
+                response.failure(f"unexpected status {response.status_code}")
 
     @task(2)
     def compute_penalty(self):

@@ -97,12 +97,16 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
-    # ui/ was manually verified once in a real browser against a live API
-    # (see README.md's "Known limitations") — a one-time human pass, not a
-    # repeatable check. This job runs the actual Playwright suite
-    # (ui/e2e/*.spec.ts) end-to-end on every push: real UI, real API, real
-    # HTTP requests, including the error-path coverage (API down mid-
-    # request, a request 400s/500s) that manual pass never covered.
+    # ui/e2e/*.spec.ts run against a real UI + real API + real HTTP
+    # requests (including error-path coverage — API down mid-request, a
+    # request 400s/500s). One matrix job per browser engine (all three
+    # Playwright ships: Chromium, Firefox, WebKit) so they run in parallel
+    # with independent pass/fail reporting, rather than one long job
+    # covering only Chromium.
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [chromium, firefox, webkit]
     steps:
       - uses: actions/checkout@v4
 
@@ -126,10 +130,10 @@ jobs:
         working-directory: ui
         run: npm ci
 
-      - name: Install Playwright browsers
+      - name: Install Playwright browser (${{ matrix.project }})
         working-directory: ui
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps ${{ matrix.project }}
 
-      - name: Run Playwright tests
+      - name: Run Playwright tests (${{ matrix.project }})
         working-directory: ui
-        run: npm run test:e2e
+        run: npx playwright test --project=${{ matrix.project }}

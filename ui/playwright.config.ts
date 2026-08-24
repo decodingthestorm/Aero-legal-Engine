@@ -18,10 +18,21 @@ export default defineConfig({
     baseURL: "http://localhost:3000",
     trace: "on-first-retry",
   },
+  // All three run by default (`npm run test:e2e` runs every configured
+  // project) — for a faster local iteration loop, filter to one:
+  // `npm run test:e2e -- --project=chromium`. CI always runs all three.
   projects: [
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
+    },
+    {
+      name: "firefox",
+      use: { ...devices["Desktop Firefox"] },
+    },
+    {
+      name: "webkit",
+      use: { ...devices["Desktop Safari"] },
     },
   ],
   webServer: [

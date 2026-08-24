@@ -2,9 +2,13 @@
 
 A legal ingestion, formal verification, and game-theoretic statutory optimization platform.
 
-v1.0.0 marks the completion of the 5-phase build plan below: every subsystem the original spec
-called for exists and has a passing test suite. It does **not** mean "battle-tested production
-system" — see [Known limitations](#known-limitations) for what that would still take.
+v1.0.0 marked the completion of the 5-phase build plan below: every subsystem the original spec
+called for exists and has a passing test suite. v1.1.0 closes three of the five items that v1.0.0's
+Known Limitations honestly flagged as open — startup reindexing, cross-browser E2E coverage, and
+load-test hardening (including a graceful-degradation path for genuine solver timeouts) — leaving
+two deliberately not done: multi-tenant auth and a liability-disclaimer UI, both scoped and
+declined for now (see Known Limitations). This still doesn't mean "battle-tested production
+system" — read on for what would still take.
 
 ## What's built
 
@@ -82,6 +86,18 @@ system" — see [Known limitations](#known-limitations) for what that would stil
   genuine Postgres — skipped locally, but for real under CI's `postgres` job (a real
   `services: postgres:` container), the same "can't verify locally, so make CI do it for real"
   pattern the `ui` job uses for the dashboard.
+
+  `hydration.py`'s `hydrate_indexes` closes the gap this originally left open: `graph_backend` and
+  `vector_backend` are separate settings that still default to in-memory, so even with
+  `statute_backend="sql"`, the graph/vector *indexes* used to wake up empty on every restart —
+  every durably-recorded statute would be invisible to preemption resolution and semantic search
+  until someone re-submitted it. `api/main.py`'s `lifespan` now calls it unconditionally on
+  startup (a no-op for the default in-memory statute backend, since `.all()` is always empty on a
+  fresh process there). This required a real schema change, not just a lifespan snippet:
+  `StatuteDocument.applies_to` didn't exist before — the statute-to-entity association
+  `GraphService.add_statute` needs was never durably recorded anywhere to rebuild from.
+  `tests/integration/test_statute_persistence.py` now proves the graph/vector state — not just the
+  statute record — survives a restart.
 - **`ui/`** — a Next.js (Pages Router, TypeScript, Tailwind) dashboard: `ProofInspector` (submit a
   clause, see the `ProofResult` and its SMT-LIB2 rendering), `SimulationCard` (deterrence-penalty
   calculator plus an SVG-rendered convex penalty curve), and `GraphViewer` (add a statute, resolve
@@ -109,6 +125,10 @@ system" — see [Known limitations](#known-limitations) for what that would stil
   class, not just this instance); a second independent run then passed 16/16. That's the concrete
   case, not just the abstract argument, for why `ui/`'s one earlier manual pass was never a
   substitute for this suite.
+
+  `playwright.config.ts` now runs all three of Playwright's browser engines (Chromium, Firefox,
+  WebKit), and CI's `e2e` job runs them as a matrix — one job per browser, in parallel, with
+  independent pass/fail reporting — rather than Chromium alone.
 
 Everything under `src/legal_engine/` (i.e. everything except `ui/`) has a passing unit and
 integration test suite under `tests/`, including an end-to-end test
@@ -162,36 +182,51 @@ inside the 480ms Z3 timeout budget (`settings.z3_timeout_ms`) even under concurr
 run once, on one machine, at a modest scale (20 concurrent users) — see Known limitations for what
 that does and doesn't prove.
 
+**Trying to find where the 480ms budget actually gets tight, empirically**: pushed domain size to
+800 with 3 quantified variables (`forall x, y, z` — a formula that would need 512 million naive
+ground instantiations) and Z3 still solved it in ~15ms. It isn't doing brute-force grounding for
+the EPR fragment; it scales far better than that for every formula shape this system's own
+compiler can produce. Even `timeout_ms=0` against a trivial formula still returns a real answer
+rather than "unknown" — Z3 checks its own timeout budget too lazily to reliably interrupt anything
+this fast. Constructing a genuinely adversarial EPR instance (the fragment is NEXPTIME-complete in
+the worst case, so pathological instances do exist) is a research-level exercise, not a load-test
+task. `load_tests/locustfile.py` now includes a 300-element-domain task anyway — not to trip the
+timeout, but because the SMT-LIB2 response text scales with domain size (one datatype constructor
+per element), a distinct and real thing to check under concurrent load; it stayed just as fast
+(p50=13ms, max=40ms, 0 failures over 86 requests in a follow-up run).
+
+Since a naturally slow formula proved impractical to construct, the timeout-handling *code path*
+(does a genuine Z3 timeout degrade to a clean 400 instead of crashing or hanging other requests) is
+covered deterministically instead, by mocking `z3.Solver`'s own `check()`/`reason_unknown()` —
+`tests/unit/test_formal_logic.py::TestSolverPoolTimeout` at the solver level,
+`tests/unit/test_api.py::test_solver_timeout_degrades_gracefully_and_server_stays_up` at the API
+level (asserts the 400 response, then issues an unmocked follow-up request to prove the process
+itself is unaffected).
+
 ## Known limitations
 
 Read this before treating any of the above as more finished than it is:
 
-- **The Playwright suite has now run for real (twice) and passes 16/16** — see `ui/e2e/`'s entry
-  above for what its first run actually caught. What that does and doesn't establish: it's Chromium
-  only (no Firefox/WebKit/mobile viewport coverage), it's been run twice on one machine by one
-  person, and CI's `e2e` job hasn't executed yet as of this commit (it will on the next push).
-  Treat "the UI has real behavioral test coverage, and it already found and fixed one bug" as
-  established; treat "this has run in CI, across browsers, over time" as not yet true.
-- **The graph/vector indexes still don't persist, even with `statute_backend = "sql"`.**
-  `persistence/` gives you a durable record of every statute ingested — but `graph_backend` and
-  `vector_backend` are separate settings that still default to in-memory, and switching them to
-  Neo4j/Qdrant is what actually makes preemption resolution and semantic search survive a restart
-  too. Nothing currently rebuilds the graph/vector indexes from the statute repository on startup
-  if you mix a persistent statute backend with in-memory indexes — that gap (an explicit
-  reindex-on-startup step) hasn't been closed.
+- **The Playwright suite has run for real (twice on Chromium, plus whatever CI's next run
+  produces across all three browsers) and passed 16/16 both times.** What that does and doesn't
+  establish: it's been run by one person on one machine so far — CI's cross-browser matrix hasn't
+  executed yet as of this commit (it will on the next push). Treat "the UI has real, cross-browser-
+  configured behavioral test coverage, and it already found and fixed one bug" as established;
+  treat "this has run in CI, repeatedly, over time" as not yet true.
 - **Auth is deliberately minimal.** One hardcoded client_id/client_secret pair
   (`settings.api_client_id`/`api_client_secret`), no user/tenant model, no token revocation, no
-  refresh tokens. Fine for a demo gateway; not what you'd want fronting anything real.
-- **Load testing has been run once, at modest scale, on one machine.** 20 concurrent users for 45
-  seconds against every in-memory default backend is real evidence the concurrency fix above holds
-  and that typical request latencies stay well inside budget — it is not evidence of behavior at
-  production scale (hundreds+ concurrent users), under sustained multi-hour load, against the
+  refresh tokens. Fine for a demo gateway; not what you'd want fronting anything real. Swapping in
+  PyJWT/passlib for the same single-credential check wouldn't change this — real multi-tenant auth
+  needs an actual user/tenant repository and tenant-scoped data isolation, a genuine feature to
+  build deliberately, not a drop-in.
+- **Load testing has been run a few times, at modest scale, on one machine.** Up to 20 concurrent
+  users for 30-45 seconds against every in-memory default backend is real evidence the concurrency
+  fix above holds, that typical request latencies stay well inside budget, and that larger response
+  payloads (a 300-element domain's SMT-LIB2 text) don't change that — it is not evidence of behavior
+  at production scale (hundreds+ concurrent users), under sustained multi-hour load, against the
   Neo4j/Qdrant/Postgres backends instead of the in-memory defaults, or from multiple load-generating
-  machines instead of one. It also didn't push `/verification/verify` with deliberately larger
-  domains or deeper formulas to find where the 480ms budget actually gets tight — the formula used
-  (an 8-element domain, one quantifier) solves in single-digit milliseconds, nowhere near the
-  timeout. Treat this as "the obvious concurrency landmine has been found and defused," not "this
-  has been capacity-planned."
+  machines instead of one. Treat this as "the obvious concurrency landmine has been found and
+  defused, and the timeout path degrades gracefully," not "this has been capacity-planned."
 - **The "formal verification" and "game-theoretic guarantees" are real math, not legal advice.**
   The EPR compiler and Z3 solver pool genuinely check what you give them; whether a hand-authored
   clause correctly captures what a statute means is a legal-drafting judgment call this system
@@ -223,9 +258,10 @@ if you already have both running from the commands above:
 
 ```bash
 cd ui
-npx playwright install --with-deps chromium   # one-time browser download
-npm run test:e2e                              # headless
+npx playwright install --with-deps            # one-time download: Chromium, Firefox, WebKit
+npm run test:e2e                              # headless, runs all three browser projects
 npm run test:e2e:ui                           # or Playwright's interactive UI mode
+npm run test:e2e -- --project=chromium        # just one browser, for a faster local loop
 ```
 
 ## Phased build plan

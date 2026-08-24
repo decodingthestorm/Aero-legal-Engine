@@ -66,6 +66,13 @@ class StatuteDocument(BaseModel):
     effective_date: datetime | None = None
     geo_boundary: GeoBoundary | None = None
     ingested_at: datetime = Field(default_factory=_utcnow)
+    applies_to: list[str] = Field(default_factory=list)
+    """Entity ids this statute is tied to in the knowledge graph (see
+    knowledge_graph.graph_service.GraphService.add_statute). Persisted here
+    (rather than only passed alongside the statute at add-time) so
+    persistence.factory's startup reindex can rebuild GraphService's
+    statute-to-entity edges from StatuteRepository alone — without this
+    field, that association would exist nowhere durable to rebuild from."""
 
 
 class StrategyType(str, Enum):

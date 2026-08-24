@@ -73,6 +73,18 @@ class TestSqlAlchemyStatuteRepository:
         fetched = await repo.get(statute.id)
         assert fetched.geo_boundary is None
 
+    async def test_applies_to_round_trips(self, repo):
+        statute = _statute(applies_to=["entity-a", "entity-b"])
+        await repo.add(statute)
+        fetched = await repo.get(statute.id)
+        assert fetched.applies_to == ["entity-a", "entity-b"]
+
+    async def test_applies_to_defaults_to_empty_list(self, repo):
+        statute = _statute()
+        await repo.add(statute)
+        fetched = await repo.get(statute.id)
+        assert fetched.applies_to == []
+
     async def test_get_missing_returns_none(self, repo):
         assert await repo.get(uuid4()) is None
 

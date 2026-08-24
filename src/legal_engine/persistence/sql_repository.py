@@ -19,6 +19,7 @@ be installed.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from uuid import UUID
 
@@ -49,6 +50,13 @@ class StatuteRecord(Base):
     geo_lon_min: Mapped[float | None] = mapped_column(nullable=True)
     geo_lon_max: Mapped[float | None] = mapped_column(nullable=True)
     ingested_at: Mapped[datetime] = mapped_column(nullable=False)
+    # JSON-encoded list[str] rather than a join table: entity ids are plain
+    # opaque strings everywhere else in the system (see
+    # knowledge_graph/graph_service.py), so a normalized association table
+    # would add real complexity (migrations, join queries) for a value this
+    # system never queries *by* entity at the SQL level — only ever reads
+    # back whole, to hand to GraphService.add_statute on startup rehydration.
+    applies_to_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
 
 
 def _to_domain(record: StatuteRecord) -> StatuteDocument:
@@ -71,6 +79,7 @@ def _to_domain(record: StatuteRecord) -> StatuteDocument:
         effective_date=record.effective_date,
         geo_boundary=geo_boundary,
         ingested_at=record.ingested_at,
+        applies_to=json.loads(record.applies_to_json),
     )
 
 
@@ -89,6 +98,7 @@ def _from_domain(statute: StatuteDocument) -> StatuteRecord:
         geo_lon_min=statute.geo_boundary.lon_min if statute.geo_boundary else None,
         geo_lon_max=statute.geo_boundary.lon_max if statute.geo_boundary else None,
         ingested_at=statute.ingested_at,
+        applies_to_json=json.dumps(statute.applies_to),
     )
 
 

@@ -85,3 +85,11 @@ async def test_list_by_citation_against_real_postgres(repo):
 
     results = await repo.list_by_citation(citation)
     assert {s.id for s in results} == {a.id, b.id}
+
+
+async def test_applies_to_roundtrip_against_real_postgres(repo):
+    statute = _statute(applies_to=["entity-a", "entity-b"])
+    await repo.add(statute)
+
+    fetched = await repo.get(statute.id)
+    assert fetched.applies_to == ["entity-a", "entity-b"]

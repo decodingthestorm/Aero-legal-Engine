@@ -63,3 +63,15 @@ class TestInMemoryStatuteRepository:
         repo = InMemoryStatuteRepository()
         await repo.create_schema()
         await repo.close()
+
+    async def test_applies_to_round_trips(self):
+        repo = InMemoryStatuteRepository()
+        statute = _statute(applies_to=["entity-a", "entity-b"])
+        await repo.add(statute)
+        assert (await repo.get(statute.id)).applies_to == ["entity-a", "entity-b"]
+
+    async def test_applies_to_defaults_to_empty_list(self):
+        repo = InMemoryStatuteRepository()
+        statute = _statute()
+        await repo.add(statute)
+        assert (await repo.get(statute.id)).applies_to == []

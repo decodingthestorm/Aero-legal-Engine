@@ -20,7 +20,7 @@ from legal_engine.api.dependencies import require_auth
 from legal_engine.api.middleware import add_middleware
 from legal_engine.api.routes import auth, graph, ingestion, refactoring, simulation, verification
 from legal_engine.core.config import settings
-from legal_engine.core.logging import configure_logging
+from legal_engine.core.logging import configure_logging, get_logger
 from legal_engine.formal_logic.solver_pool import SolverPool
 from legal_engine.ingestion.rate_limiter import PoliteFetcher
 from legal_engine.knowledge_graph.factory import (
@@ -29,6 +29,9 @@ from legal_engine.knowledge_graph.factory import (
     build_vector_index,
 )
 from legal_engine.persistence.factory import build_statute_repository
+from legal_engine.persistence.hydration import hydrate_indexes
+
+logger = get_logger(__name__)
 
 
 @asynccontextmanager
@@ -45,6 +48,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.fetcher = PoliteFetcher()
     app.state.statute_repository = build_statute_repository()
     await app.state.statute_repository.create_schema()
+
+    rehydrated_count = await hydrate_indexes(
+        app.state.statute_repository, app.state.graph_service, app.state.vector_index, app.state.embedder
+    )
+    if rehydrated_count:
+        logger.info("rehydrated_indexes_from_statute_repository", count=rehydrated_count)
+
     try:
         yield
     finally:
@@ -53,7 +63,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Legal Engine Platform API", version="1.0.0", lifespan=lifespan)
+    app = FastAPI(title="Legal Engine Platform API", version="1.1.0", lifespan=lifespan)
     add_middleware(app)
 
     # /auth/token itself must stay unprotected (that's the only way to get a

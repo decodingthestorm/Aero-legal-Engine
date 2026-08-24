@@ -1,6 +1,6 @@
 import pytest
 
-from legal_engine.core.exceptions import NotEPRFragmentError
+from legal_engine.core.exceptions import NotEPRFragmentError, SolverTimeoutError
 from legal_engine.formal_logic.ast_nodes import And, Atom, Constant, Implies, Not, Variable
 from legal_engine.formal_logic.disambiguator import QuantifierKind, classify_qualifier
 from legal_engine.formal_logic.epr_compiler import compile_epr_formula
@@ -138,3 +138,46 @@ class TestSolverPool:
         result = pool.check(formula)
         assert result.satisfiable is True
         assert result.counterexample is not None
+
+
+class TestSolverPoolTimeout:
+    """Z3 checks its own timeout budget too lazily to reliably interrupt any
+    formula our compiler can realistically produce for a test: even
+    timeout_ms=0 against a trivial formula still returns a real answer
+    rather than "unknown" (Z3 apparently only checks the budget at certain
+    internal checkpoints, not on every step) — and pushing domain size to
+    800 with 3 quantified variables (a formula that would need 512M naive
+    ground instantiations) still solved in ~15ms, since Z3's EPR handling
+    isn't doing brute-force grounding. Mocking z3.Solver's own check()/
+    reason_unknown() is the reliable way to exercise this branch instead of
+    chasing an increasingly artificial "slow enough" formula.
+    """
+
+    def test_raises_solver_timeout_error_when_z3_reports_a_timeout(self, monkeypatch):
+        import z3
+
+        formula = _ownership_implies_reporting()
+        pool = SolverPool(pool_size=1, timeout_ms=480, memory_limit_mb=512)
+
+        monkeypatch.setattr(z3.Solver, "check", lambda self: z3.unknown)
+        monkeypatch.setattr(z3.Solver, "reason_unknown", lambda self: "timeout")
+
+        with pytest.raises(SolverTimeoutError, match="480ms"):
+            pool.check(formula)
+
+    def test_returns_timed_out_flag_for_an_unclear_unknown_reason(self, monkeypatch):
+        """An "unknown" verdict whose reason doesn't mention timeout/canceled
+        (e.g. a genuine memory-limit hit) degrades to a ProofResult with
+        timed_out=True rather than raising — still a graceful, non-crashing
+        outcome, just a different one than an explicit timeout."""
+        import z3
+
+        formula = _ownership_implies_reporting()
+        pool = SolverPool(pool_size=1, timeout_ms=480, memory_limit_mb=512)
+
+        monkeypatch.setattr(z3.Solver, "check", lambda self: z3.unknown)
+        monkeypatch.setattr(z3.Solver, "reason_unknown", lambda self: "some other reason")
+
+        result = pool.check(formula)
+        assert result.satisfiable is False
+        assert result.timed_out is True
