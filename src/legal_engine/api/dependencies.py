@@ -34,6 +34,7 @@ from legal_engine.compliance.consent import DISCLAIMER_VERSION, ConsentLedger
 from legal_engine.compliance.token_ledger import TokenLedger
 from legal_engine.core.config import settings
 from legal_engine.core.email_sender import EmailSender
+from legal_engine.core.models import UserAccount
 from legal_engine.core.wal import WriteAheadLog
 from legal_engine.formal_logic.solver_pool import SolverPool
 from legal_engine.ingestion.rate_limiter import PoliteFetcher
@@ -188,6 +189,21 @@ async def require_consent(request: Request, tenant_id: Annotated[str, Depends(ge
                 "See GET /legal/disclaimer and POST /legal/accept."
             ),
         )
+
+
+async def require_owner(subject: str | None, user_repository: UserRepository) -> UserAccount:
+    """Shared owner-only gate — originally lived in routes/auth.py (POST
+    /invite, then the member-management routes), moved here once
+    routes/legal.py's POST /revoke needed the exact same check: "is this
+    caller their tenant's owner." No meaningful "who's calling" identity
+    exists when settings.api_auth_enabled is off, so any route using this
+    simply isn't usable in that mode."""
+    if subject is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+    caller = await user_repository.get_by_email(subject)
+    if caller is None or caller.role != "owner":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only a tenant's owner can do this")
+    return caller
 
 
 GraphServiceDep = Annotated[GraphService, Depends(get_graph_service)]

@@ -51,6 +51,7 @@ DISCLAIMER_TEXT = (
 )
 
 _ACCEPTANCE_EVENT_TYPE = "legal_disclaimer_accepted"
+_REVOCATION_EVENT_TYPE = "legal_disclaimer_revoked"
 
 
 @dataclass(frozen=True)
@@ -102,6 +103,11 @@ class ConsentLedger:
             self._index(entry)
 
     def _index(self, entry: WALEntry) -> None:
+        if entry.event_type == _REVOCATION_EVENT_TYPE:
+            tenant_id = entry.payload.get("tenant_id")
+            if tenant_id:
+                self._latest_by_tenant.pop(tenant_id, None)
+            return
         if entry.event_type != _ACCEPTANCE_EVENT_TYPE:
             return
         tenant_id = entry.payload.get("tenant_id")
@@ -126,6 +132,19 @@ class ConsentLedger:
         )
         self._index(entry)
         return self._latest_by_tenant[tenant_id]
+
+    def revoke_acceptance(self, tenant_id: str, reason: str = "") -> None:
+        """Appends a revocation entry and clears the tenant's projected
+        entry in the same call — has_accepted_current_disclaimer answers
+        False immediately afterward, with no other route or gate needing
+        to know this happened: require_consent (api/dependencies.py)
+        already re-checks has_accepted_current_disclaimer fresh on every
+        gated request. A later record_acceptance call re-establishes
+        acceptance from scratch; replaying the WAL from the start
+        reproduces the same end state either way, since entries are
+        indexed strictly in the WAL's own chronological order."""
+        entry = self._wal.append(_REVOCATION_EVENT_TYPE, {"tenant_id": tenant_id, "reason": reason})
+        self._index(entry)
 
     def has_accepted_current_disclaimer(self, tenant_id: str) -> bool:
         record = self._latest_by_tenant.get(tenant_id)

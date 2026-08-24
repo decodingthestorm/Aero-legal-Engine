@@ -76,6 +76,39 @@ class TestConsentLedger:
         wal.append("statute_ingested", {"tenant_id": TENANT_A, "disclaimer_version": DISCLAIMER_VERSION})
         assert ledger.has_accepted_current_disclaimer(TENANT_A) is False
 
+    def test_revoking_an_accepted_tenant_makes_it_false_again(self, ledger):
+        ledger.record_acceptance(TENANT_A, subject="test-client-a")
+        ledger.revoke_acceptance(TENANT_A, reason="signer changed")
+        assert ledger.has_accepted_current_disclaimer(TENANT_A) is False
+        assert ledger.latest_acceptance(TENANT_A) is None
+
+    def test_revoking_an_unaccepted_tenant_is_a_safe_noop(self, ledger):
+        ledger.revoke_acceptance(TENANT_A, reason="nothing to revoke")
+        assert ledger.has_accepted_current_disclaimer(TENANT_A) is False
+
+    def test_revoking_one_tenant_does_not_affect_another(self, ledger):
+        ledger.record_acceptance(TENANT_A, subject="client-a")
+        ledger.record_acceptance(TENANT_B, subject="client-b")
+        ledger.revoke_acceptance(TENANT_A)
+        assert ledger.has_accepted_current_disclaimer(TENANT_A) is False
+        assert ledger.has_accepted_current_disclaimer(TENANT_B) is True
+
+    def test_re_accepting_after_revocation_works(self, ledger):
+        ledger.record_acceptance(TENANT_A, subject="first-login")
+        ledger.revoke_acceptance(TENANT_A)
+        ledger.record_acceptance(TENANT_A, subject="second-login")
+        assert ledger.has_accepted_current_disclaimer(TENANT_A) is True
+        assert ledger.latest_acceptance(TENANT_A).subject == "second-login"
+
+    def test_revocation_is_tamper_evident(self, wal, ledger):
+        ledger.record_acceptance(TENANT_A, subject="test-client-a")
+        ledger.revoke_acceptance(TENANT_A, reason="signer changed")
+        wal.verify()  # should not raise
+
+        wal.entries()[1].payload["tenant_id"] = TENANT_B  # forge the revocation onto tenant B
+        with pytest.raises(WALIntegrityError, match="payload_hash"):
+            wal.verify()
+
 
 class TestConsentLedgerReplay:
     """The index must be exactly re-derivable from the WAL alone — the
@@ -123,3 +156,23 @@ class TestConsentLedgerReplay:
         assert replayed_ledger.has_accepted_current_disclaimer(TENANT_B) is True
         assert replayed_ledger.latest_acceptance(TENANT_A).subject == "client-a"
         assert replayed_ledger.latest_acceptance(TENANT_B).subject == "client-b"
+
+    def test_replay_reconstructs_revoked_state(self):
+        wal = WriteAheadLog(generate_signing_key())
+        original_ledger = ConsentLedger(wal)
+        original_ledger.record_acceptance(TENANT_A, subject="test-client-a")
+        original_ledger.revoke_acceptance(TENANT_A, reason="signer changed")
+
+        replayed_ledger = ConsentLedger(wal)
+        assert replayed_ledger.has_accepted_current_disclaimer(TENANT_A) is False
+
+    def test_replay_reconstructs_re_acceptance_after_revocation(self):
+        wal = WriteAheadLog(generate_signing_key())
+        original_ledger = ConsentLedger(wal)
+        original_ledger.record_acceptance(TENANT_A, subject="first-login")
+        original_ledger.revoke_acceptance(TENANT_A)
+        original_ledger.record_acceptance(TENANT_A, subject="second-login")
+
+        replayed_ledger = ConsentLedger(wal)
+        assert replayed_ledger.has_accepted_current_disclaimer(TENANT_A) is True
+        assert replayed_ledger.latest_acceptance(TENANT_A).subject == "second-login"

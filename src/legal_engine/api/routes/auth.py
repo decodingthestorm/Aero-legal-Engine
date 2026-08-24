@@ -73,6 +73,7 @@ from legal_engine.api.dependencies import (
     TokenLedgerDep,
     UserRepositoryDep,
     require_auth,
+    require_owner,
 )
 from legal_engine.api.security import (
     InvalidTokenError,
@@ -87,19 +88,6 @@ from legal_engine.core.models import UserAccount
 from legal_engine.persistence.user_repository import UserRepository
 
 router = APIRouter()
-
-
-async def _require_owner(subject: str | None, user_repository: UserRepository) -> UserAccount:
-    """Shared by every member-management route below (mirrors the check
-    POST /invite already did inline) — no meaningful "who's calling"
-    identity exists when settings.api_auth_enabled is off, so these
-    routes simply aren't usable in that mode, same as POST /invite."""
-    if subject is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
-    caller = await user_repository.get_by_email(subject)
-    if caller is None or caller.role != "owner":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only a tenant's owner can do this")
-    return caller
 
 
 async def _would_leave_tenant_without_an_owner(
@@ -313,7 +301,7 @@ async def invite(
     user_repository: UserRepositoryDep,
     email_sender: EmailSenderDep,
 ) -> InviteResponse:
-    await _require_owner(subject, user_repository)
+    await require_owner(subject, user_repository)
     if await user_repository.get_by_email(request.email) is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
 
@@ -399,7 +387,7 @@ async def change_member_role(
     tenant_id: TenantIdDep,
     user_repository: UserRepositoryDep,
 ) -> ChangeRoleResponse:
-    await _require_owner(subject, user_repository)
+    await require_owner(subject, user_repository)
 
     target = await user_repository.get_by_email(email)
     if target is None or target.tenant_id != tenant_id:
@@ -428,7 +416,7 @@ async def remove_member(
     user_repository: UserRepositoryDep,
     token_ledger: TokenLedgerDep,
 ) -> RemoveMemberResponse:
-    await _require_owner(subject, user_repository)
+    await require_owner(subject, user_repository)
 
     target = await user_repository.get_by_email(email)
     if target is None or target.tenant_id != tenant_id:

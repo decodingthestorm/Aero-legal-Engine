@@ -57,6 +57,10 @@ honestly-flagged gap from the version before it — never a rewrite, always addi
   removal, reusing v1.6.1's session-cascade so a removed member's live sessions die immediately).
   Both role-change and removal reject the change that would leave a tenant with zero owners (409).
   Closes "no way to change a role or remove a member after the fact, no listing who's in a tenant."
+- **v1.8.0** — `POST /legal/revoke` (owner-only): a tenant can withdraw its liability-disclaimer
+  acceptance, immediately re-blocking `/verification`/`/simulation` via the existing
+  `require_consent` gate with no other wiring needed. Closes "no way to revoke or amend an
+  acceptance once recorded."
 
 None of this means "battle-tested production system" — read on for what would still take.
 
@@ -450,6 +454,30 @@ tenant never unblocks another (same isolation guarantee as the data-isolation se
 `refactoring`/`graph`/`ingestion` stay ungated by this, since they're not what the disclaimer is
 about.
 
+**Acceptance revocation**, added in v1.8.0, closing "no way to revoke or amend an acceptance once
+recorded" — e.g. the person who accepted is no longer with the organization, or a tenant otherwise
+wants to withdraw its acceptance.
+
+- **`POST /legal/revoke`** — owner-only (`{"role": "member"}` callers get 403), via the same
+  `require_owner` dependency (`api/dependencies.py`) the member-management routes use — deciding
+  who's an authorized signer for a tenant is exactly the same question either way, so this reuses
+  that check rather than inventing a second one. Appends a `legal_disclaimer_revoked` WAL entry
+  (never mutates or deletes the original acceptance entry — this is still an append-only log) and
+  clears that tenant from `ConsentLedger`'s projection in the same call.
+- No token-level cascade needed the way member removal needed one: `require_consent`
+  (`api/dependencies.py`) already re-checks `has_accepted_current_disclaimer` fresh on every
+  `/verification`/`/simulation` request, so a revocation blocks further calls immediately — the
+  *same* still-valid access token that worked a moment before is rejected on its very next request,
+  with nothing about the token itself having changed.
+- A later `POST /legal/accept` re-establishes acceptance from scratch — revocation isn't a
+  one-way door for the tenant, only for that specific acceptance record.
+
+`tests/integration/test_consent_revocation.py` proves this end-to-end: an owner accepts, uses
+`/verification` successfully, revokes, and is blocked again (403) on the same token with no new
+token issued or revoked; re-accepting unblocks it again; a non-owner can't revoke (403), and their
+rejected attempt leaves the tenant's existing acceptance untouched; revocation for one tenant never
+affects another.
+
 **What this still isn't**: by default, the WAL's signing key is still persisted to disk
 unencrypted (`Ed25519FileKeySigner`, `core/key_signer.py`) — the same gap this codebase's other
 plaintext-default secrets (`jwt_secret`, `api_client_secret`) already have. `settings.wal_signer_backend`
@@ -611,12 +639,13 @@ Read this before treating any of the above as more finished than it is:
   WAL scan) but its supporting infrastructure is still minimal.** The WAL's signing key is a
   plaintext file on disk by default (`Ed25519FileKeySigner`) — `settings.wal_signer_backend` can
   point this at AWS KMS or Vault instead (`core/key_signer.py`), real dispatching code, but neither
-  path has been exercised against an actual AWS account or Vault instance. There's no way to revoke
-  or amend an acceptance once recorded (append-only is the point, but that also means no "the
-  tenant's authorized signer changed" flow exists yet), and `ConsentLedger` itself is an in-process
-  index rebuilt by a full WAL replay at every startup, not a persisted index of its own — untested
-  at any real scale (WAL size, replay time, or concurrent tenant count). See "Liability disclaimer
-  & consent" above for what it does establish.
+  path has been exercised against an actual AWS account or Vault instance. As of v1.8.0, an owner
+  can revoke an acceptance (`POST /legal/revoke` — "the tenant's authorized signer changed" flow),
+  which is itself just another appended, tamper-evident WAL entry, not a mutation of the original
+  one — append-only is still the point. `ConsentLedger` itself is an in-process index rebuilt by a
+  full WAL replay at every startup, not a persisted index of its own — untested at any real scale
+  (WAL size, replay time, or concurrent tenant count). See "Liability disclaimer & consent" above
+  for what it does establish.
 - **Load testing has been run a few times, at up to 300 concurrent users, on one machine.** That's
   real evidence the concurrency fix holds, that the Z3 timeout budget is respected even under heavy
   queueing, and that larger response payloads don't change that — it is not evidence of behavior at
