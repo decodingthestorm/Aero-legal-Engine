@@ -61,6 +61,11 @@ honestly-flagged gap from the version before it — never a rewrite, always addi
   acceptance, immediately re-blocking `/verification`/`/simulation` via the existing
   `require_consent` gate with no other wiring needed. Closes "no way to revoke or amend an
   acceptance once recorded."
+- **v1.9.0** — `uncertainty/`: a semantic-entropy abstention gate for stochastic model output, the
+  one node of a proposed v2.0 spec that was both genuinely buildable here and genuinely broken as
+  specified — its threshold (8.5) sat 3.7× above the mathematical ceiling of the quantity it gated
+  on (log(10) = 2.3026 nats), so it could never fire. The gate now rejects an unfireable threshold
+  at construction. See "Semantic entropy abstention gate" below.
 
 None of this means "battle-tested production system" — read on for what would still take.
 
@@ -143,6 +148,11 @@ None of this means "battle-tested production system" — read on for what would 
   `Ed25519FileKeySigner`'s algorithm rather than switching families.
 - **`compliance/consent.py`** — per-tenant liability-disclaimer acceptance, recorded as WAL entries
   rather than a separate consent table. See "Liability disclaimer & consent" below.
+- **`uncertainty/`** — semantic entropy over bidirectional-entailment clusters, as an abstention
+  gate for stochastic (LLM) output: sample the same question N times, group the samples by
+  *meaning* rather than by string, and take the Shannon entropy of that distribution. Consistent
+  answers score 0; mutually incompatible ones approach the ceiling. See "Semantic entropy
+  abstention gate" below — including why the ceiling is the load-bearing detail.
 - **`workers/`** — a real Celery app (`celery_app.py`, Redis broker/backend, matching
   `docker/docker-compose.yml`) and two tasks (`crawl_and_parse`, `index_statute_embedding`).
   Both are fully tested via `.apply(...).get()`, which runs a task synchronously in-process with
@@ -537,6 +547,79 @@ one of those "optional" dependencies turned out to already be installed in a bro
 git history on `knowledge_graph/embeddings.py` for what that surfaced). `api` and `workers` are
 deployment-role extras (a library-only user shouldn't need FastAPI or Celery pulled in) rather
 than lazy-backend extras; CI installs both to cover their tests.
+
+### Semantic entropy abstention gate
+
+Added in v1.9.0 (`uncertainty/`). The premise (Kuhn et al.; Farquhar et al., *Nature* 2024): to
+tell a confident model from a confabulating one, sample the same question N times and measure
+whether the samples agree about *meaning* rather than about wording. Group them into clusters by
+bidirectional entailment, then take the Shannon entropy of the cluster distribution. One meaning
+repeated N times is entropy 0. N incompatible meanings is the maximum. Above a threshold, the
+honest response is to abstain rather than return whichever sample came first.
+
+This was built from a v2.0 spec whose version of the gate could never fire, and the correction is
+the interesting part:
+
+**The ceiling is the load-bearing detail.** Entropy over a partition of exactly N samples is
+bounded by log(N), attained only when every sample forms its own cluster. For the usual N=10 that
+ceiling is **log(10) = 2.3026 nats** (3.3219 bits). The source spec set the abstention threshold at
+**8.5** — roughly 3.7× above a bound nobody re-derived while reading it. Nothing about that
+misconfiguration is noisy: no exception, no log line, every input simply passes, and the abstention
+path stays permanently unreachable while still appearing present in the design document. A gate
+that always passes is strictly worse than no gate, because it's credited as a safety control.
+
+So the threshold is validated against `max_entropy(n_samples)` at **construction**, not at call
+time, and `SemanticEntropyGate` refuses to build:
+
+```
+ValueError: entropy_threshold=8.5 cannot fire for n_samples=10: semantic entropy over 10
+generations is bounded by log(10) = 2.3026 nats, so the gate would pass every input and its
+abstention path would be unreachable. Choose a threshold in [0.0, 2.3026).
+```
+
+`uncertainty/factory.py` deliberately does no clamping — a bad threshold in settings propagates as
+this error rather than being quietly repaired into range, since silently repairing it restores the
+exact failure mode the check exists to catch. `evaluate()` likewise requires exactly `n_samples`
+generations: accepting fewer would lower the ceiling without re-checking the threshold against it,
+which is the side door back to an unfireable gate after `__init__` closed the front one.
+
+- **`EntailmentModel`** (`uncertainty/entailment.py`) — same Protocol-plus-always-available-
+  default-plus-lazy-real-backend shape as `Embedder`/`KeySigner`/`EmailSender`.
+  `LexicalEntailmentModel` is the default: deterministic token-containment scoring, no ML
+  dependencies, so the whole suite runs against it. It is explicitly *not* a semantic model — it
+  reads "the contract is void" and "the agreement is invalid" as unrelated. That error runs in the
+  safe direction: under-clustering splits one meaning across several clusters, which *raises*
+  measured entropy and makes the gate abstain more readily than a real NLI model would. A
+  hallucination gate that errs toward abstention fails safe; one that errs toward passing does not.
+  `CrossEncoderEntailmentModel` lazy-imports a real NLI cross-encoder behind the `semantic` extra
+  and fails closed with an install hint here, since torch's native extensions don't load in this
+  environment.
+- **Negation is the one thing the lexical default gets exactly right**, and it's the property worth
+  protecting: "the clause is enforceable" and "the clause is not enforceable" differ by a token
+  containment scoring sees, so they never merge. No stopword filtering is applied anywhere in that
+  module specifically to keep this true — dropping "not" as a stopword would collapse an answer
+  with its own negation and report confident agreement exactly where the model contradicted itself.
+- **Clustering is greedy first-match against each cluster's representative**, not a transitive
+  closure over all pairs. Bidirectional entailment isn't empirically transitive, so a closure can
+  chain a→b→c while a and c are plainly different answers, silently merging meanings and
+  under-reporting entropy.
+- **Default threshold is 1.0 nats**, just under log(3) = 1.0986: a dominant answer with a couple of
+  strays passes (8/1/1 scores 0.639, 9/1 scores 0.325, an even 5/5 split scores 0.693), while a
+  genuine three-way disagreement fires (4/3/3 scores 1.089).
+
+`tests/property/test_semantic_entropy_bounds.py` proves the 0 ≤ H ≤ log(N) bound generatively over
+arbitrary partitions rather than the handful of shapes the unit tests enumerate — worth proving
+rather than assuming, given that assuming a ceiling 3.7× too high is the defect being corrected.
+It also proves clustering always returns a true partition of its input, which is what makes cluster
+sizes a valid probability distribution to take entropy over.
+
+**What this still isn't**: a library primitive with no caller wired to it. There is no LLM anywhere
+in this codebase — no constrained-decoding extraction path exists for it to gate, and inventing one
+that can't actually run here would be worse than leaving the seam honest. The `cross_encoder`
+backend has never been exercised against a real checkpoint, and its `entailment_label_index` is
+checkpoint-specific: pointing it at the wrong index would not raise, it would score contradiction
+as entailment and drive measured entropy toward zero. Threshold calibration is reasoned from the
+cluster arithmetic above, not tuned against a labelled legal corpus.
 
 ## Load testing
 

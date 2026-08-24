@@ -97,6 +97,34 @@ class Settings(BaseSettings):
     smtp_from_address: str = "noreply@legal-engine.local"
     smtp_use_tls: bool = True
 
+    # uncertainty/factory.py: semantic-entropy abstention gate over
+    # stochastic (LLM) output. "lexical" (the default, always available)
+    # is deterministic token-containment scoring — a conservative floor
+    # that over-splits paraphrases and so over-abstains, which is the safe
+    # direction; "cross_encoder" needs the `semantic` install extra and a
+    # real NLI checkpoint. See uncertainty/entailment.py.
+    entailment_backend: Literal["lexical", "cross_encoder"] = "lexical"
+    entailment_model_name: str = "cross-encoder/nli-deberta-v3-base"
+    # Which index of the checkpoint's 3-way NLI output is "entailment".
+    # Checkpoint-specific, not a standard — see CrossEncoderEntailmentModel.
+    entailment_label_index: int = 1
+    # Two texts join the same meaning cluster only if each entails the
+    # other at or above this probability.
+    semantic_entailment_threshold: float = 0.9
+    # Semantic entropy is bounded by log(semantic_entropy_samples) nats —
+    # log(10) = 2.3026 — so a threshold at or above that ceiling makes the
+    # gate unreachable. SemanticEntropyGate rejects such a threshold at
+    # construction rather than silently passing every input; see
+    # uncertainty/semantic_entropy.py's module docstring.
+    #
+    # The 1.0 default sits just under log(3) = 1.0986, so it tolerates a
+    # dominant answer with a couple of outliers (8/1/1 scores 0.639, 9/1
+    # scores 0.325, an even 5/5 split scores 0.693) but fires on a genuine
+    # three-way disagreement (4/3/3 scores 1.089). Tune per corpus; keep
+    # it strictly below the ceiling.
+    semantic_entropy_samples: int = 10
+    semantic_entropy_threshold: float = 1.0
+
     # API
     api_host: str = "0.0.0.0"
     api_port: int = 8000
