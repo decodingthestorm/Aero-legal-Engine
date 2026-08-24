@@ -143,6 +143,7 @@ export default function ProofInspector() {
           className="h-40 rounded border border-slate-700 bg-slate-800 p-2 font-mono text-xs text-slate-100"
           value={matrixJson}
           onChange={(e) => setMatrixJson(e.target.value)}
+          data-testid="matrix-textarea"
         />
       </label>
 
@@ -150,14 +151,19 @@ export default function ProofInspector() {
         className="mt-3 rounded bg-indigo-600 px-3 py-1.5 text-sm font-medium hover:bg-indigo-500 disabled:opacity-50"
         onClick={handleVerify}
         disabled={loading}
+        data-testid="verify-button"
       >
         {loading ? "Verifying…" : "Verify clause"}
       </button>
 
-      {error && <p className="mt-3 whitespace-pre-wrap text-sm text-red-400">{error}</p>}
+      {error && (
+        <p className="mt-3 whitespace-pre-wrap text-sm text-red-400" data-testid="verify-error">
+          {error}
+        </p>
+      )}
 
       {result && (
-        <div className="mt-4 space-y-3">
+        <div className="mt-4 space-y-3" data-testid="verify-result">
           <div
             className={`rounded border p-3 text-sm ${
               result.proof_result.satisfiable

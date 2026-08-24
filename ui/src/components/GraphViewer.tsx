@@ -135,11 +135,20 @@ function AddStatutePanel() {
         className="mt-3 rounded bg-indigo-600 px-3 py-1.5 text-sm font-medium hover:bg-indigo-500 disabled:opacity-50"
         onClick={handleSubmit}
         disabled={loading}
+        data-testid="add-statute-button"
       >
         {loading ? "Adding…" : "Add statute"}
       </button>
-      {status && <p className="mt-2 text-sm text-emerald-400">{status}</p>}
-      {error && <p className="mt-2 text-sm text-red-400">{error}</p>}
+      {status && (
+        <p className="mt-2 text-sm text-emerald-400" data-testid="add-statute-status">
+          {status}
+        </p>
+      )}
+      {error && (
+        <p className="mt-2 text-sm text-red-400" data-testid="add-statute-error">
+          {error}
+        </p>
+      )}
     </div>
   );
 }
@@ -176,18 +185,23 @@ function PreemptionPanel() {
           value={entityId}
           onChange={(e) => setEntityId(e.target.value)}
           placeholder="entity id"
+          data-testid="preemption-entity-input"
         />
         <button
           className="rounded bg-indigo-600 px-3 py-1.5 text-sm font-medium hover:bg-indigo-500 disabled:opacity-50"
           onClick={handleLookup}
           disabled={loading}
+          data-testid="preemption-resolve-button"
         >
           {loading ? "Looking up…" : "Resolve"}
         </button>
       </div>
       {error && <p className="mt-3 text-sm text-red-400">{error}</p>}
       {result && (
-        <div className="mt-3 rounded border border-slate-800 bg-slate-950/60 p-3 text-sm">
+        <div
+          className="mt-3 rounded border border-slate-800 bg-slate-950/60 p-3 text-sm"
+          data-testid="preemption-result"
+        >
           {result.requires_review ? (
             <p className="text-amber-400">
               Requires human review: multiple statutes at the same tier conflict
@@ -244,18 +258,20 @@ function SearchPanel() {
           className="flex-1 rounded border border-slate-700 bg-slate-800 px-2 py-1 text-sm"
           value={queryText}
           onChange={(e) => setQueryText(e.target.value)}
+          data-testid="search-query-input"
         />
         <button
           className="rounded bg-indigo-600 px-3 py-1.5 text-sm font-medium hover:bg-indigo-500 disabled:opacity-50"
           onClick={handleSearch}
           disabled={loading}
+          data-testid="search-button"
         >
           {loading ? "Searching…" : "Search"}
         </button>
       </div>
       {error && <p className="mt-3 text-sm text-red-400">{error}</p>}
       {matches && (
-        <ul className="mt-3 divide-y divide-slate-800 text-sm">
+        <ul className="mt-3 divide-y divide-slate-800 text-sm" data-testid="search-results">
           {matches.length === 0 && <li className="py-2 text-slate-400">No statutes indexed yet.</li>}
           {matches.map((m) => (
             <li key={m.citation} className="flex items-center justify-between py-2">

@@ -90,13 +90,21 @@ export default function SimulationCard() {
         className="mt-3 rounded bg-indigo-600 px-3 py-1.5 text-sm font-medium hover:bg-indigo-500 disabled:opacity-50"
         onClick={handleComputePenalty}
         disabled={penaltyLoading}
+        data-testid="compute-penalty-button"
       >
         {penaltyLoading ? "Computing…" : "Compute minimum penalty"}
       </button>
 
-      {penaltyError && <p className="mt-3 text-sm text-red-400">{penaltyError}</p>}
+      {penaltyError && (
+        <p className="mt-3 text-sm text-red-400" data-testid="penalty-error">
+          {penaltyError}
+        </p>
+      )}
       {penaltyResult && (
-        <div className="mt-3 rounded border border-slate-800 bg-slate-950/60 p-3 text-sm">
+        <div
+          className="mt-3 rounded border border-slate-800 bg-slate-950/60 p-3 text-sm"
+          data-testid="penalty-result"
+        >
           <Row label="Deterrence threshold" value={penaltyResult.minimum_deterrent_penalty.toFixed(2)} />
           <Row label="Recommended penalty" value={penaltyResult.recommended_penalty.toFixed(2)} />
           <Row
@@ -118,6 +126,7 @@ export default function SimulationCard() {
         className="mt-3 rounded bg-indigo-600 px-3 py-1.5 text-sm font-medium hover:bg-indigo-500 disabled:opacity-50"
         onClick={handleComputeCurve}
         disabled={curveLoading}
+        data-testid="plot-curve-button"
       >
         {curveLoading ? "Computing…" : "Plot curve"}
       </button>
@@ -153,10 +162,16 @@ function Field({
 }
 
 function Row({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
+  const testId = `row-value-${label.toLowerCase().replace(/\s+/g, "-")}`;
   return (
     <div className="flex justify-between py-0.5">
       <span className="text-slate-400">{label}</span>
-      <span className={highlight ? "font-medium text-emerald-400" : "font-medium text-slate-100"}>{value}</span>
+      <span
+        className={highlight ? "font-medium text-emerald-400" : "font-medium text-slate-100"}
+        data-testid={testId}
+      >
+        {value}
+      </span>
     </div>
   );
 }
@@ -179,7 +194,11 @@ function PenaltyCurveChart({ points }: { points: CurvePoint[] }) {
   const path = points.map((p) => `${scaleX(p.x)},${scaleY(p.y)}`).join(" ");
 
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="mt-4 w-full rounded border border-slate-800 bg-slate-950/60">
+    <svg
+      viewBox={`0 0 ${width} ${height}`}
+      className="mt-4 w-full rounded border border-slate-800 bg-slate-950/60"
+      data-testid="penalty-curve-chart"
+    >
       <polyline points={path} fill="none" stroke="#818cf8" strokeWidth={2} />
       {points.map((p) => (
         <circle key={p.x} cx={scaleX(p.x)} cy={scaleY(p.y)} r={3} fill="#818cf8" />

@@ -75,11 +75,8 @@ jobs:
 
   ui:
     runs-on: ubuntu-latest
-    # ui/ has been manually verified once (npm install + npm run dev +
-    # exercising all three components in a real browser against a live
-    # API) — see README.md's "Known limitations". This job is the
-    # repeatable regression check going forward: it doesn't replicate that
-    # manual browser pass, but it does catch anything that stops compiling.
+    # Fast check: does it compile and type-check. The `e2e` job below is
+    # the one that actually proves the app behaves correctly in a browser.
     steps:
       - uses: actions/checkout@v4
 
@@ -97,3 +94,42 @@ jobs:
       - name: Build (includes TypeScript type-checking)
         working-directory: ui
         run: npm run build
+
+  e2e:
+    runs-on: ubuntu-latest
+    # ui/ was manually verified once in a real browser against a live API
+    # (see README.md's "Known limitations") — a one-time human pass, not a
+    # repeatable check. This job runs the actual Playwright suite
+    # (ui/e2e/*.spec.ts) end-to-end on every push: real UI, real API, real
+    # HTTP requests, including the error-path coverage (API down mid-
+    # request, a request 400s/500s) that manual pass never covered.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Python dependencies
+        run: pip install -e ".[dev,api,workers]"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install UI dependencies
+        working-directory: ui
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: ui
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Playwright tests
+        working-directory: ui
+        run: npm run test:e2e

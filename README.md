@@ -89,9 +89,16 @@ system" — see [Known limitations](#known-limitations) for what that would stil
   (`src/lib/api.ts`). Written without Node.js available in the build environment, so `npm install`,
   `next dev`, and a real browser session were all someone else's first run of it, not mine — and
   that run did surface one real bug (missing CORS support, since fixed) that no Python-side test
-  could have caught. All three components have since been manually verified end-to-end in a
-  browser against a live API: compiles clean, every panel renders, every request round-trips
-  correctly. See Known limitations for what "manually verified once" doesn't cover.
+  could have caught.
+- **`ui/e2e/`** — Playwright tests covering all three components against a real, live API: the
+  happy paths (verify a satisfiable/unsatisfiable clause, compute a penalty and plot its curve, add
+  a statute and resolve its preemption, semantic search) *and* the error paths that were missing
+  before (`error-handling.spec.ts` — API unreachable, a request 500s, a request 400s — using route
+  interception to simulate real failures without needing to control the live server's lifecycle
+  mid-test). `playwright.config.ts` starts both the UI and the API itself (or reuses them if
+  already running locally), so `npm run test:e2e` is one command. Written the same way as `ui/`
+  itself — no Node.js available to run it while writing it — so it's unverified in the same sense;
+  see Known limitations.
 
 Everything under `src/legal_engine/` (i.e. everything except `ui/`) has a passing unit and
 integration test suite under `tests/`, including an end-to-end test
@@ -149,14 +156,14 @@ that does and doesn't prove.
 
 Read this before treating any of the above as more finished than it is:
 
-- **The UI has been manually verified once, not automatically.** It compiles cleanly and all
-  three components (ProofInspector, SimulationCard, GraphViewer) have been exercised end-to-end
-  in a real browser against a live API — but that was one manual pass through the happy paths,
-  not a repeatable test suite. There's no Playwright/Cypress (or similar) browser test, no error-
-  path coverage (what does the UI show if the API is down mid-request, or a request 400s?), and no
-  regression protection against a future change breaking something that manual pass happened to
-  check. CI's `ui` job (`npm install && npm run build`) still only proves it compiles, not that it
-  behaves correctly — that's what the manual pass added, once, for the paths above.
+- **The UI has been manually verified once by a human; the Playwright suite that's meant to
+  replace that has not been run by anyone yet.** `ui/e2e/` was written the same way the rest of the
+  UI was — without Node.js available to run it — so while it's written carefully against real,
+  known-working selectors (`data-testid` attributes added to the components specifically for this)
+  and the actual API contracts, it has never actually executed. CI's new `e2e` job runs it for real
+  on every push going forward, but as of this writing that hasn't happened yet either. Until one of
+  those runs (CI's or a local `npm run test:e2e`) actually completes, "there's an automated browser
+  test suite" is a claim about what was written, not about what's been proven to pass.
 - **The graph/vector indexes still don't persist, even with `statute_backend = "sql"`.**
   `persistence/` gives you a durable record of every statute ingested — but `graph_backend` and
   `vector_backend` are separate settings that still default to in-memory, and switching them to
@@ -201,6 +208,16 @@ For the UI (requires Node.js 20+; needs the API running separately, see above):
 ```bash
 make ui-install
 make ui-dev   # http://localhost:3000, expects the API at NEXT_PUBLIC_API_BASE_URL (default :8000)
+```
+
+For the Playwright E2E suite (`ui/e2e/`) — starts both the UI and the API itself, or reuses them
+if you already have both running from the commands above:
+
+```bash
+cd ui
+npx playwright install --with-deps chromium   # one-time browser download
+npm run test:e2e                              # headless
+npm run test:e2e:ui                           # or Playwright's interactive UI mode
 ```
 
 ## Phased build plan

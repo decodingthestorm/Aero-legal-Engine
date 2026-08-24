@@ -17,6 +17,9 @@ data/wal/*.log
 node_modules/
 ui/.next/
 ui/out/
+ui/playwright-report/
+ui/test-results/
+ui/blob-report/
 .coverage
 htmlcov/
 load_tests/results/
