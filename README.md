@@ -42,6 +42,12 @@ honestly-flagged gap from the version before it — never a rewrite, always addi
   `POST /accept-invite`, closing "no inviting a second user into an existing tenant" and "no
   roles/permissions" together: the natural minimal role model here is exactly what an invite system
   needs to gate on (only an owner can invite).
+- **v1.6.0** — `core/email_sender.py`'s `EmailSender` (`LoggingEmailSender` default,
+  `SmtpEmailSender` real dispatch, stdlib-only, no install extra) plus `POST
+  /auth/request-password-reset` + `POST /auth/reset-password` + `POST /auth/verify-email`, closing
+  the last two gaps: "no password reset" and "no email verification flow." The final Known
+  Limitations bullet this whole thread traces back to is now empty of the four items it originally
+  named.
 
 None of this means "battle-tested production system" — read on for what would still take.
 
@@ -134,9 +140,10 @@ None of this means "battle-tested production system" — read on for what would 
   `kind`, and returns both the `ProofResult` and the rendered SMT-LIB2 text), `/simulation/penalty`
   and `/simulation/trembling-hand`, `/refactoring/detect-loopholes` + `/refactoring/sparse-patch`, `/graph/statutes` +
   `/graph/preemption/{entity_id}` + `/graph/search`, `/ingestion/jobs`, `/auth/token` +
-  `/auth/register` + `/auth/invite` + `/auth/accept-invite` + `/auth/refresh` + `/auth/revoke` (see
-  "User accounts, tokens & revocation" below), and `/legal/disclaimer` + `/legal/accept` (see
-  "Liability disclaimer & consent" below).
+  `/auth/register` + `/auth/invite` + `/auth/accept-invite` + `/auth/refresh` + `/auth/revoke` +
+  `/auth/request-password-reset` + `/auth/reset-password` + `/auth/verify-email` (see "User
+  accounts, tokens & revocation" below), and `/legal/disclaimer` + `/legal/accept` (see "Liability
+  disclaimer & consent" below).
   Every route depends on the knowledge_graph Protocol interfaces rather than concrete classes;
   which concrete class each resolves to is decided by `knowledge_graph/factory.py`, itself driven
   by `core.config.settings` (`graph_backend`/`vector_backend`/`embedding_backend`) — swapping in
@@ -296,9 +303,7 @@ invite system with no notion of who's allowed to send one.
   registered. Issues an invite token (`token_type="invite"`, `settings.
   invite_token_expires_days` — a week by default) scoped to the *inviter's own tenant* — this is
   what actually lets someone join an *existing* tenant, unlike `POST /auth/register`, which always
-  creates a brand-new one. Would be emailed to the invitee in a real deployment; returned directly
-  in the response for now, same as every other token this system issues, so the flow is directly
-  testable without a real inbox.
+  creates a brand-new one.
 - **`POST /auth/accept-invite`** — `{invite_token, password}`. Creates the `UserAccount` (role
   `"member"`, same `tenant_id` the invite was scoped to) and revokes the invite token's `jti` via
   the *same* `TokenLedger.revoke` `POST /revoke` already uses — no second single-use mechanism
@@ -312,8 +317,50 @@ email is rejected (409); accepting the same invite token twice is rejected (401,
 `TokenLedger`'s existing single-use guarantee); an access token presented at `/accept-invite` is
 rejected the same way a refresh token is rejected elsewhere (`token_type` checked).
 
-**What this still isn't**: there's no way to change a role or remove a member after the fact, no
-listing who's in a tenant, and no password reset or email verification flow.
+**What this still isn't**: there's no way to change a role or remove a member after the fact, and
+no listing who's in a tenant.
+
+**Password reset & email verification**, added in v1.6.0, closing the last two gaps. Every token
+this module hands to an email address (invite, password reset, and registration's verification
+token) is now both sent through a real `EmailSender` *and* returned directly in the API response —
+a real deployment would only do the former, but returning it too keeps every one of these flows
+directly testable and usable without a real inbox, the same reasoning invites already established.
+
+- **`core/email_sender.py`**'s `EmailSender` — matches `core/key_signer.py`'s Protocol-plus-
+  default-plus-lazy-real-backend shape almost exactly, but it's a stateless dispatch service, not a
+  WAL-backed trust ledger, which is why it lives in `core/` rather than `compliance/` alongside
+  `ConsentLedger`/`TokenLedger`. `LoggingEmailSender` is the default, always-available backend
+  (logs instead of sending). `SmtpEmailSender` is real dispatching code — `smtplib` +
+  `email.message`, both stdlib, so unlike the AWS KMS/Vault `KeySigner` backends there's *no
+  install extra needed at all* — but like them, it's unverified against a live server in this
+  environment; a real connection failure there is left to propagate as a real error, not silently
+  swallowed. `settings.email_backend` (`"logging"`/`"smtp"`) selects it, mirroring
+  `wal_signer_backend`'s dispatch exactly (`core/email_sender_factory.py`).
+- **`POST /auth/request-password-reset`** — `{email}`. Always 200s and never reveals whether the
+  email is registered (`reset_token` is only present in the response when the account actually
+  exists) — a real anti-enumeration property, not an oversight.
+- **`POST /auth/reset-password`** — `{reset_token, new_password}`. Single-use (same `TokenLedger.
+  revoke` reuse as invite tokens). Does **not** retroactively invalidate other already-issued
+  sessions for that user — a documented scope cut, not an oversight: sessions are tracked by
+  `family_id` (see refresh-token rotation above), not enumerated per-user, and building that
+  enumeration just for this is real added scope not taken on here.
+- **`POST /auth/verify-email`** — `{verify_token}` (issued alongside every token pair at `POST
+  /auth/register`). Sets `UserAccount.email_verified`. Not single-use via `TokenLedger` the way
+  invite/reset tokens are — verifying an already-verified email twice with the same token is a
+  harmless no-op, not a security-relevant reuse, since `email_verified` itself is the durable
+  record. Still not *enforced* anywhere — no route currently checks it — so treat it as real,
+  queryable state rather than a functioning access gate.
+
+`tests/integration/test_password_reset_and_verification.py` proves this end-to-end: requesting a
+reset for an unregistered email still 200s with no token (the enumeration check); a reset actually
+changes the password (the old one is rejected at `/auth/token`, the new one works); reusing a reset
+token twice is rejected; registration's verify token flips `email_verified` and a second use is a
+harmless no-op.
+
+**What this still isn't**: `SmtpEmailSender` is real, dispatching code, unverified against a live
+mail server; password reset doesn't cascade-invalidate other active sessions; `email_verified` is
+tracked but not enforced anywhere; there's still no way to change a role, remove a member, or list
+who's in a tenant.
 
 ### Liability disclaimer & consent
 
@@ -504,18 +551,20 @@ Read this before treating any of the above as more finished than it is:
   executed yet as of this commit (it will on the next push). Treat "the UI has real, cross-browser-
   configured behavioral test coverage, and it already found and fixed one bug" as established;
   treat "this has run in CI, repeatedly, over time" as not yet true.
-- **Registration, revocation, refresh rotation, reuse-detection, roles, and invites are all real
-  now; account management still isn't.** As of v1.2.0,
-  `StatuteRepository`/`GraphService`/`VectorIndex` are genuinely tenant-scoped end to end; as of
-  v1.3.0, `POST /auth/register` provisions genuine, independent tenant/credential pairs; as of
-  v1.4.0, a leaked or stolen access token can actually be revoked (not just wait out its
-  `settings.jwt_expires_minutes` expiry), and refresh tokens are genuinely redeemable, single-use,
-  rotating; as of v1.4.1, reusing a spent refresh token revokes the whole session, not just that one
-  token; as of v1.5.0, an owner can invite a real second user into their *existing* tenant, with a
-  real (if minimal) role distinction gating who's allowed to (see "User accounts, tokens &
-  revocation" above for all five) — none of that aspirational. What's still missing: no way to
-  change a role or remove a member after the fact, no listing who's in a tenant, no password reset
-  or email verification flow.
+- **Every gap this section originally named is closed now; a handful of smaller, honestly-scoped
+  ones remain.** As of v1.2.0, `StatuteRepository`/`GraphService`/`VectorIndex` are genuinely
+  tenant-scoped end to end; as of v1.3.0, `POST /auth/register` provisions genuine, independent
+  tenant/credential pairs; as of v1.4.0, a leaked or stolen access token can actually be revoked
+  (not just wait out its `settings.jwt_expires_minutes` expiry), and refresh tokens are genuinely
+  redeemable, single-use, rotating; as of v1.4.1, reusing a spent refresh token revokes the whole
+  session, not just that one token; as of v1.5.0, an owner can invite a real second user into their
+  *existing* tenant, with a real (if minimal) role distinction gating who's allowed to; as of
+  v1.6.0, password reset and email verification are real, working flows, sent through a real
+  (if here-unverified) `EmailSender` (see "User accounts, tokens & revocation" above for all six) —
+  none of that aspirational. What's still missing, smaller in scope than what's been closed: no way
+  to change a role or remove a member after the fact, no listing who's in a tenant, password reset
+  doesn't cascade-invalidate other active sessions, `email_verified` is tracked but not enforced
+  anywhere, and `SmtpEmailSender` has never been exercised against a real mail server.
 - **The liability-disclaimer consent record is real (tamper-evident, tied to a server-verified
   token subject, tenant-scoped, and — since `ConsentLedger` — an O(1) indexed lookup rather than a
   WAL scan) but its supporting infrastructure is still minimal.** The WAL's signing key is a

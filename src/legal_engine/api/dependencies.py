@@ -33,6 +33,7 @@ from legal_engine.api.security import InvalidTokenError, decode_token
 from legal_engine.compliance.consent import DISCLAIMER_VERSION, ConsentLedger
 from legal_engine.compliance.token_ledger import TokenLedger
 from legal_engine.core.config import settings
+from legal_engine.core.email_sender import EmailSender
 from legal_engine.core.wal import WriteAheadLog
 from legal_engine.formal_logic.solver_pool import SolverPool
 from legal_engine.ingestion.rate_limiter import PoliteFetcher
@@ -149,6 +150,10 @@ def get_token_ledger(request: Request) -> TokenLedger:
     return request.app.state.token_ledger
 
 
+def get_email_sender(request: Request) -> EmailSender:
+    return request.app.state.email_sender
+
+
 async def require_auth(request: Request) -> str | None:
     """No-ops (returns None) when settings.api_auth_enabled is False — the
     default, and what every other test in this suite runs against. When
@@ -195,4 +200,5 @@ UserRepositoryDep = Annotated[UserRepository, Depends(get_user_repository)]
 WalDep = Annotated[WriteAheadLog, Depends(get_wal)]
 ConsentLedgerDep = Annotated[ConsentLedger, Depends(get_consent_ledger)]
 TokenLedgerDep = Annotated[TokenLedger, Depends(get_token_ledger)]
+EmailSenderDep = Annotated[EmailSender, Depends(get_email_sender)]
 TenantIdDep = Annotated[str, Depends(get_current_tenant)]

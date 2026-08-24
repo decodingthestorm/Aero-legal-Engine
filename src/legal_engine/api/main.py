@@ -31,6 +31,7 @@ from legal_engine.api.routes import (
 from legal_engine.compliance.consent import ConsentLedger
 from legal_engine.compliance.token_ledger import TokenLedger
 from legal_engine.core.config import settings
+from legal_engine.core.email_sender_factory import build_email_sender
 from legal_engine.core.key_signer_factory import build_key_signer
 from legal_engine.core.logging import configure_logging, get_logger
 from legal_engine.core.wal import WriteAheadLog
@@ -63,6 +64,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await app.state.statute_repository.create_schema()
     app.state.user_repository = build_user_repository()
     await app.state.user_repository.create_schema()
+    app.state.email_sender = build_email_sender()
 
     # The audit/consent log (core/wal.py, compliance/consent.py). Loads the
     # settings.wal_signer_backend-selected KeySigner (core/key_signer.py,
@@ -95,7 +97,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Legal Engine Platform API", version="1.5.0", lifespan=lifespan)
+    app = FastAPI(title="Legal Engine Platform API", version="1.6.0", lifespan=lifespan)
     add_middleware(app)
 
     # /auth (token/register) and /legal/disclaimer must stay unprotected

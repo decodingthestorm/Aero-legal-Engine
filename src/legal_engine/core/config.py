@@ -81,6 +81,22 @@ class Settings(BaseSettings):
     wal_vault_url: str = "http://127.0.0.1:8200"
     wal_vault_token: str = ""
 
+    # core/email_sender_factory.py: which backend POST /auth/invite,
+    # /auth/request-password-reset, and registration's email-verification
+    # step send through. "logging" (the default, always available) logs
+    # instead of actually sending — see LoggingEmailSender's docstring.
+    # "smtp" needs no install extra (smtplib/email are stdlib) but does
+    # need a real SMTP server configured; not exercised against a live
+    # one in this environment (see core/email_sender.py's module
+    # docstring).
+    email_backend: Literal["logging", "smtp"] = "logging"
+    smtp_host: str = "localhost"
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from_address: str = "noreply@legal-engine.local"
+    smtp_use_tls: bool = True
+
     # API
     api_host: str = "0.0.0.0"
     api_port: int = 8000
@@ -116,6 +132,19 @@ class Settings(BaseSettings):
     # compliance/token_ledger.py's revoke reuse). A week is generous
     # enough that a real emailed invite doesn't expire before it's read.
     invite_token_expires_days: int = 7
+    # POST /auth/request-password-reset issues one of these; POST
+    # /reset-password redeems it (single-use, same TokenLedger.revoke
+    # reuse as invite tokens). Deliberately much shorter-lived than an
+    # invite — a reset link sitting in an inbox is a real, if small,
+    # window of exposure, so this stays tight (OWASP's usual
+    # recommendation is well under an hour).
+    password_reset_token_expires_minutes: int = 30
+    # POST /auth/register issues one of these; POST /auth/verify-email
+    # redeems it. Not single-use via TokenLedger the way invite/reset
+    # tokens are — UserAccount.email_verified is itself the durable
+    # record, so a second verify-email call with the same token is just a
+    # harmless no-op, not a security-relevant reuse.
+    email_verification_token_expires_days: int = 7
 
     # Tenant every request is scoped to when settings.api_auth_enabled is
     # False (the default) — the whole deployment behaves as one tenant,

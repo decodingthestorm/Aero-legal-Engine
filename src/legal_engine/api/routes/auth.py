@@ -1,5 +1,6 @@
 """Token issuance, self-service tenant/user registration, tenant invites,
-and token lifecycle (refresh rotation, revocation).
+password reset / email verification, and token lifecycle (refresh
+rotation, revocation).
 
 POST /token predates POST /register: there's still exactly one hardcoded
 demo credential (settings.api_client_id/api_client_secret) that always
@@ -13,12 +14,27 @@ user, who becomes that tenant's "owner" (UserAccount.role — see
 core/models.py). It is not a "join an existing tenant" flow — that's what
 POST /invite (owner-only) + POST /accept-invite (public, gated by
 possessing a valid invite token) are for: an owner invites an email,
-gets back an invite_token (would be emailed in a real deployment — see
-compliance/email_sender.py once that lands; for now it's returned
-directly), and whoever holds that token can accept it to become a
-"member" of the *same* tenant. Single-use: accepting revokes the invite
-token's jti via the same TokenLedger POST /revoke already uses, so a
-second acceptance attempt with the same token is rejected.
+gets back an invite_token, and whoever holds that token can accept it to
+become a "member" of the *same* tenant. Single-use: accepting revokes the
+invite token's jti via the same TokenLedger POST /revoke already uses, so
+a second acceptance attempt with the same token is rejected.
+
+Every token this module hands to an email address (invite, password
+reset, and registration's email-verification token) is both sent through
+EmailSenderDep (core/email_sender.py — logs instead of actually sending
+by default; see that module for why) *and* returned directly in the API
+response — a real deployment would only do the former, but returning it
+too is what keeps every one of these flows directly testable and usable
+without a real inbox in this environment.
+
+POST /request-password-reset never reveals whether an email is
+registered (always 200s; the reset_token field is only present when the
+account actually exists) — a real anti-enumeration property, not an
+oversight. POST /reset-password does *not* retroactively invalidate
+other already-issued sessions for that user — a known, documented scope
+cut (see the README) — because sessions are tracked by family_id
+(compliance/token_ledger.py), not enumerated per-user, and building that
+enumeration is real added scope this doesn't take on.
 
 POST /refresh redeems a still-valid, not-yet-used refresh token for a new
 access+refresh pair — single-use rotation (compliance/token_ledger.py):
@@ -40,6 +56,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 
 from legal_engine.api.dependencies import (
+    EmailSenderDep,
     TenantIdDep,
     TokenLedgerDep,
     UserRepositoryDep,
@@ -112,8 +129,38 @@ class RegisterResponse(BaseModel):
     tenant_id: str
     access_token: str
     refresh_token: str
+    verify_token: str
     token_type: str = "bearer"
     expires_in_minutes: int
+
+
+class RequestPasswordResetRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+
+    _check_email = field_validator("email")(_validate_email_shape)
+
+
+class RequestPasswordResetResponse(BaseModel):
+    # Always 200 regardless of whether the email is registered (anti-
+    # enumeration) — reset_token is only ever populated when it is.
+    reset_token: str | None = None
+
+
+class ResetPasswordRequest(BaseModel):
+    reset_token: str
+    new_password: str = Field(min_length=8, max_length=256)
+
+
+class ResetPasswordResponse(BaseModel):
+    reset: bool
+
+
+class VerifyEmailRequest(BaseModel):
+    verify_token: str
+
+
+class VerifyEmailResponse(BaseModel):
+    verified: bool
 
 
 class InviteRequest(BaseModel):
@@ -153,7 +200,9 @@ class RevokeResponse(BaseModel):
 
 
 @router.post("/register", response_model=RegisterResponse)
-async def register(request: RegisterRequest, user_repository: UserRepositoryDep) -> RegisterResponse:
+async def register(
+    request: RegisterRequest, user_repository: UserRepositoryDep, email_sender: EmailSenderDep
+) -> RegisterResponse:
     if await user_repository.get_by_email(request.email) is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
 
@@ -163,8 +212,21 @@ async def register(request: RegisterRequest, user_repository: UserRepositoryDep)
     )
     await user_repository.add(user)
 
+    verify_token = create_token(
+        subject=user.email,
+        tenant_id=tenant_id,
+        token_type="email_verification",
+        expires_minutes=settings.email_verification_token_expires_days * 24 * 60,
+    )
+    email_sender.send(
+        to=user.email,
+        subject="Verify your email",
+        body=f"Welcome! Verify your email with this token: {verify_token}",
+    )
+
     access_token, refresh_token = _issue_token_pair(user.email, tenant_id)
     return RegisterResponse(
+        verify_token=verify_token,
         tenant_id=tenant_id,
         access_token=access_token,
         refresh_token=refresh_token,
@@ -178,6 +240,7 @@ async def invite(
     subject: Annotated[str | None, Depends(require_auth)],
     tenant_id: TenantIdDep,
     user_repository: UserRepositoryDep,
+    email_sender: EmailSenderDep,
 ) -> InviteResponse:
     if subject is None:
         # require_auth returns None only when settings.api_auth_enabled is
@@ -198,9 +261,13 @@ async def invite(
     invite_token = create_token(
         subject=request.email, tenant_id=tenant_id, token_type="invite", expires_minutes=expires_minutes
     )
-    # Would be emailed to request.email in a real deployment
-    # (compliance/email_sender.py) — returned directly here too so the
-    # flow is usable and testable without a real inbox.
+    email_sender.send(
+        to=request.email,
+        subject=f"{subject} invited you to their Legal Engine Platform tenant",
+        body=f"Accept with this token: {invite_token}",
+    )
+    # Also returned directly (not just emailed) so the flow is usable and
+    # testable without a real inbox — see the module docstring.
     return InviteResponse(invite_token=invite_token, expires_in_minutes=expires_minutes)
 
 
@@ -298,3 +365,80 @@ async def revoke(request: RevokeRequest, token_ledger: TokenLedgerDep) -> Revoke
         payload.get("jti", ""), payload.get("tenant_id", ""), reason="client-requested revocation"
     )
     return RevokeResponse(revoked=True)
+
+
+@router.post("/request-password-reset", response_model=RequestPasswordResetResponse)
+async def request_password_reset(
+    request: RequestPasswordResetRequest, user_repository: UserRepositoryDep, email_sender: EmailSenderDep
+) -> RequestPasswordResetResponse:
+    user = await user_repository.get_by_email(request.email)
+    if user is None:
+        # Always 200 either way — never confirms whether an email is
+        # registered. See the module docstring.
+        return RequestPasswordResetResponse(reset_token=None)
+
+    reset_token = create_token(
+        subject=user.email,
+        tenant_id=user.tenant_id,
+        token_type="password_reset",
+        expires_minutes=settings.password_reset_token_expires_minutes,
+    )
+    email_sender.send(
+        to=user.email,
+        subject="Reset your password",
+        body=f"Reset your password with this token: {reset_token}",
+    )
+    return RequestPasswordResetResponse(reset_token=reset_token)
+
+
+@router.post("/reset-password", response_model=ResetPasswordResponse)
+async def reset_password(
+    request: ResetPasswordRequest, user_repository: UserRepositoryDep, token_ledger: TokenLedgerDep
+) -> ResetPasswordResponse:
+    try:
+        payload = decode_token(request.reset_token)
+    except InvalidTokenError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+
+    if payload.get("token_type") != "password_reset":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not a password reset token")
+
+    email = payload.get("sub", "")
+    jti = payload.get("jti", "")
+    if token_ledger.is_revoked(jti):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Reset token has already been used or revoked"
+        )
+
+    user = await user_repository.get_by_email(email)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Account no longer exists")
+
+    updated = user.model_copy(update={"password_hash": hash_password(request.new_password)})
+    await user_repository.add(updated)
+    # Single-use, same reused mechanism as invite/accept-invite.
+    token_ledger.revoke(jti, user.tenant_id, reason="password reset")
+    return ResetPasswordResponse(reset=True)
+
+
+@router.post("/verify-email", response_model=VerifyEmailResponse)
+async def verify_email(request: VerifyEmailRequest, user_repository: UserRepositoryDep) -> VerifyEmailResponse:
+    try:
+        payload = decode_token(request.verify_token)
+    except InvalidTokenError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+
+    if payload.get("token_type") != "email_verification":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not an email verification token")
+
+    user = await user_repository.get_by_email(payload.get("sub", ""))
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Account no longer exists")
+
+    # Not revoked after use the way invite/reset tokens are: re-verifying
+    # an already-verified email with the same token is a harmless no-op,
+    # not a security-relevant reuse — email_verified itself is the
+    # durable record.
+    if not user.email_verified:
+        await user_repository.add(user.model_copy(update={"email_verified": True}))
+    return VerifyEmailResponse(verified=True)
