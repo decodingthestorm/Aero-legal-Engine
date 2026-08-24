@@ -45,11 +45,23 @@ compliance/token_ledger.py's family_id) rather than silently succeeding.
 POST /revoke: possession of a token (access or refresh) is the
 authorization to revoke it — matches ordinary "logout" semantics, no
 separate auth check needed beyond having the token itself.
+
+GET /members lists the caller's own tenant's roster (any authenticated
+member, not owner-gated — seeing your own teammates isn't a privileged
+action). POST /members/{email}/role and DELETE /members/{email} are
+owner-only, and both protect the one real invariant this feature has to
+maintain: a tenant can never end up with zero owners (409 if a change
+would cause that). Removing a member also revokes every session they're
+currently holding (compliance/token_ledger.py's
+revoke_all_sessions_for_subject, the same mechanism POST /reset-password
+uses) — a removed member's access stops immediately, not just their
+ability to log in again.
 """
 
 from __future__ import annotations
 
-from typing import Annotated
+from datetime import datetime
+from typing import Annotated, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -72,8 +84,30 @@ from legal_engine.api.security import (
 from legal_engine.compliance.token_ledger import TokenLedger
 from legal_engine.core.config import settings
 from legal_engine.core.models import UserAccount
+from legal_engine.persistence.user_repository import UserRepository
 
 router = APIRouter()
+
+
+async def _require_owner(subject: str | None, user_repository: UserRepository) -> UserAccount:
+    """Shared by every member-management route below (mirrors the check
+    POST /invite already did inline) — no meaningful "who's calling"
+    identity exists when settings.api_auth_enabled is off, so these
+    routes simply aren't usable in that mode, same as POST /invite."""
+    if subject is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+    caller = await user_repository.get_by_email(subject)
+    if caller is None or caller.role != "owner":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only a tenant's owner can do this")
+    return caller
+
+
+async def _would_leave_tenant_without_an_owner(
+    user_repository: UserRepository, tenant_id: str, excluding_email: str
+) -> bool:
+    members = await user_repository.list_by_tenant(tenant_id)
+    remaining_owners = [m for m in members if m.role == "owner" and m.email != excluding_email]
+    return len(remaining_owners) == 0
 
 
 def _validate_email_shape(value: str) -> str:
@@ -197,6 +231,30 @@ class AcceptInviteResponse(BaseModel):
     expires_in_minutes: int
 
 
+class MemberSchema(BaseModel):
+    email: str
+    role: str
+    email_verified: bool
+    created_at: datetime
+
+
+class MembersListResponse(BaseModel):
+    members: list[MemberSchema]
+
+
+class ChangeRoleRequest(BaseModel):
+    role: Literal["owner", "member"]
+
+
+class ChangeRoleResponse(BaseModel):
+    email: str
+    role: str
+
+
+class RemoveMemberResponse(BaseModel):
+    removed: bool
+
+
 class RefreshRequest(BaseModel):
     refresh_token: str
 
@@ -255,18 +313,7 @@ async def invite(
     user_repository: UserRepositoryDep,
     email_sender: EmailSenderDep,
 ) -> InviteResponse:
-    if subject is None:
-        # require_auth returns None only when settings.api_auth_enabled is
-        # off — invites are inherently a real-multi-tenant feature, so
-        # there's no meaningful "who's inviting" identity to check in
-        # that mode.
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
-
-    inviter = await user_repository.get_by_email(subject)
-    if inviter is None or inviter.role != "owner":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Only a tenant's owner can send invites"
-        )
+    await _require_owner(subject, user_repository)
     if await user_repository.get_by_email(request.email) is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
 
@@ -323,6 +370,83 @@ async def accept_invite(
         refresh_token=refresh_token,
         expires_in_minutes=settings.jwt_expires_minutes,
     )
+
+
+@router.get("/members", response_model=MembersListResponse)
+async def list_members(
+    subject: Annotated[str | None, Depends(require_auth)],
+    tenant_id: TenantIdDep,
+    user_repository: UserRepositoryDep,
+) -> MembersListResponse:
+    if subject is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+    members = await user_repository.list_by_tenant(tenant_id)
+    return MembersListResponse(
+        members=[
+            MemberSchema(
+                email=m.email, role=m.role, email_verified=m.email_verified, created_at=m.created_at
+            )
+            for m in members
+        ]
+    )
+
+
+@router.post("/members/{email}/role", response_model=ChangeRoleResponse)
+async def change_member_role(
+    email: str,
+    request: ChangeRoleRequest,
+    subject: Annotated[str | None, Depends(require_auth)],
+    tenant_id: TenantIdDep,
+    user_repository: UserRepositoryDep,
+) -> ChangeRoleResponse:
+    await _require_owner(subject, user_repository)
+
+    target = await user_repository.get_by_email(email)
+    if target is None or target.tenant_id != tenant_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such member in this tenant")
+
+    if (
+        target.role == "owner"
+        and request.role == "member"
+        and await _would_leave_tenant_without_an_owner(user_repository, tenant_id, excluding_email=email)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot demote the tenant's last remaining owner",
+        )
+
+    updated = target.model_copy(update={"role": request.role})
+    await user_repository.add(updated)
+    return ChangeRoleResponse(email=email, role=request.role)
+
+
+@router.delete("/members/{email}", response_model=RemoveMemberResponse)
+async def remove_member(
+    email: str,
+    subject: Annotated[str | None, Depends(require_auth)],
+    tenant_id: TenantIdDep,
+    user_repository: UserRepositoryDep,
+    token_ledger: TokenLedgerDep,
+) -> RemoveMemberResponse:
+    await _require_owner(subject, user_repository)
+
+    target = await user_repository.get_by_email(email)
+    if target is None or target.tenant_id != tenant_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such member in this tenant")
+
+    if target.role == "owner" and await _would_leave_tenant_without_an_owner(
+        user_repository, tenant_id, excluding_email=email
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot remove the tenant's last remaining owner",
+        )
+
+    await user_repository.remove(email)
+    # A removed member's access stops immediately, not just their ability
+    # to log in again — same mechanism POST /reset-password uses.
+    token_ledger.revoke_all_sessions_for_subject(email, tenant_id, reason="member removed")
+    return RemoveMemberResponse(removed=True)
 
 
 @router.post("/token", response_model=TokenResponse)

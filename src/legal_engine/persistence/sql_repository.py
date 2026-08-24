@@ -238,5 +238,17 @@ class SqlAlchemyUserRepository:
             record = await session.get(UserRecord, email)
             return _user_to_domain(record) if record is not None else None
 
+    async def list_by_tenant(self, tenant_id: str) -> list[UserAccount]:
+        async with self._session_factory() as session:
+            result = await session.execute(select(UserRecord).where(UserRecord.tenant_id == tenant_id))
+            return [_user_to_domain(r) for r in result.scalars().all()]
+
+    async def remove(self, email: str) -> None:
+        async with self._session_factory() as session:
+            record = await session.get(UserRecord, email)
+            if record is not None:
+                await session.delete(record)
+                await session.commit()
+
     async def close(self) -> None:
         await self._engine.dispose()

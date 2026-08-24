@@ -14,10 +14,9 @@ system can find the one account an email maps to.
 POST /auth/register always provisions a brand-new tenant alongside its
 first user (that user becomes the tenant's "owner" — UserAccount.role);
 POST /auth/invite + POST /accept-invite (owner-only, api/routes/auth.py)
-add further "member" users to an *existing* tenant. Still no "list users
-in a tenant" method here — nothing has needed one yet (an owner inviting
-someone doesn't need to enumerate existing members first) — add one if
-that changes rather than guessing at its shape now.
+add further "member" users to an *existing* tenant. GET /auth/members +
+POST /auth/members/{email}/role + DELETE /auth/members/{email} (same
+file) are what list_by_tenant/remove below exist for.
 
 ``InMemoryUserRepository`` lives here (no SQLAlchemy import, always
 available) rather than alongside ``SqlAlchemyUserRepository`` in
@@ -38,6 +37,10 @@ class UserRepository(Protocol):
 
     async def get_by_email(self, email: str) -> UserAccount | None: ...
 
+    async def list_by_tenant(self, tenant_id: str) -> list[UserAccount]: ...
+
+    async def remove(self, email: str) -> None: ...
+
     async def create_schema(self) -> None: ...
 
     async def close(self) -> None: ...
@@ -52,6 +55,12 @@ class InMemoryUserRepository:
 
     async def get_by_email(self, email: str) -> UserAccount | None:
         return self._users.get(email)
+
+    async def list_by_tenant(self, tenant_id: str) -> list[UserAccount]:
+        return [user for user in self._users.values() if user.tenant_id == tenant_id]
+
+    async def remove(self, email: str) -> None:
+        self._users.pop(email, None)  # already-gone is not an error — same as revoking a revoked jti
 
     async def create_schema(self) -> None:
         pass  # nothing to create for an in-memory dict

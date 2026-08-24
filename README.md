@@ -52,6 +52,11 @@ honestly-flagged gap from the version before it — never a rewrite, always addi
 - **v1.6.1** — `TokenLedger.revoke_all_sessions_for_subject`: `POST /auth/reset-password` now kills
   *every* active session for that user, not just the one reset token — the "assume this account may
   be compromised" property a password reset is supposed to have.
+- **v1.7.0** — tenant member management: `GET /auth/members` (list), `POST
+  /auth/members/{email}/role` (owner-only role change), `DELETE /auth/members/{email}` (owner-only
+  removal, reusing v1.6.1's session-cascade so a removed member's live sessions die immediately).
+  Both role-change and removal reject the change that would leave a tenant with zero owners (409).
+  Closes "no way to change a role or remove a member after the fact, no listing who's in a tenant."
 
 None of this means "battle-tested production system" — read on for what would still take.
 
@@ -321,8 +326,8 @@ email is rejected (409); accepting the same invite token twice is rejected (401,
 `TokenLedger`'s existing single-use guarantee); an access token presented at `/accept-invite` is
 rejected the same way a refresh token is rejected elsewhere (`token_type` checked).
 
-**What this still isn't**: there's no way to change a role or remove a member after the fact, and
-no listing who's in a tenant.
+**What this still isn't**, as of v1.5.0: there's no way to change a role or remove a member after
+the fact, and no listing who's in a tenant — closed below in "Tenant member management."
 
 **Password reset & email verification**, added in v1.6.0, closing the last two gaps. Every token
 this module hands to an email address (invite, password reset, and registration's verification
@@ -367,8 +372,34 @@ both old access tokens immediately** — not just the reset token — and never 
 user's session.
 
 **What this still isn't**: `SmtpEmailSender` is real, dispatching code, unverified against a live
-mail server; `email_verified` is tracked but not enforced anywhere; there's still no way to change a
-role, remove a member, or list who's in a tenant.
+mail server; `email_verified` is tracked but not enforced anywhere.
+
+**Tenant member management**, added in v1.7.0, closing the "no way to change a role or remove a
+member after the fact, no listing who's in a tenant" gap this section flagged above. All three
+routes operate strictly within the caller's own `tenant_id` (from the bearer token, same as every
+other tenant-scoped route) — a `{email}` path parameter naming an account in a *different* tenant is
+rejected with 404, not 403, so the endpoint never confirms whether that email exists anywhere else.
+
+- **`GET /auth/members`** — any authenticated member of a tenant (not owner-gated: seeing your own
+  team's roster isn't a privileged action). Returns `email`, `role`, `email_verified`, `created_at`
+  for every member — never `password_hash`.
+- **`POST /auth/members/{email}/role`** — owner-only (403 otherwise). `{role: "owner"|"member"}`.
+  404 if the target isn't in the caller's own tenant. Demoting the tenant's *last* remaining owner to
+  `"member"` is rejected with 409 — the one real invariant this feature has to protect, since a
+  tenant with zero owners could never again change a role or remove a member itself.
+- **`DELETE /auth/members/{email}`** — owner-only (403 otherwise), same 404/409-last-owner
+  protection as role change. Also calls `TokenLedger.revoke_all_sessions_for_subject` (the same
+  mechanism v1.6.1 built for password reset) — a removed member's already-issued access tokens stop
+  working on their very next request, not just their ability to log in again.
+- Both `_require_owner` and the last-owner check (`_would_leave_tenant_without_an_owner`) are shared
+  helpers now used by `/auth/invite` too — extracted rather than writing a third near-duplicate
+  owner-check inline.
+
+`tests/integration/test_member_management.py` proves this end-to-end: an owner sees both themselves
+and an invited member on the roster; a plain member can list but not change anything; promoting a
+member to owner and demoting the original owner actually swaps who can manage the tenant afterward;
+demoting or removing the tenant's last owner is rejected (409); a member removed mid-session has
+their live access token rejected on the very next request, not just future logins.
 
 ### Liability disclaimer & consent
 
@@ -569,11 +600,12 @@ Read this before treating any of the above as more finished than it is:
   *existing* tenant, with a real (if minimal) role distinction gating who's allowed to; as of
   v1.6.0, password reset and email verification are real, working flows, sent through a real
   (if here-unverified) `EmailSender`; as of v1.6.1, a password reset kills every other active
-  session for that user, not just the reset token itself (see "User accounts, tokens & revocation"
-  above for all seven) — none of that aspirational. What's still missing, smaller in scope than
-  what's been closed: no way to change a role or remove a member after the fact, no listing who's in
-  a tenant, `email_verified` is tracked but not enforced anywhere, and `SmtpEmailSender` has never
-  been exercised against a real mail server.
+  session for that user, not just the reset token itself; as of v1.7.0, an owner can list, promote,
+  demote, or remove a tenant's members, with a removal killing that member's live sessions
+  immediately (see "User accounts, tokens & revocation" above for all eight) — none of that
+  aspirational. What's still missing, smaller in scope than what's been closed: `email_verified` is
+  tracked but not enforced anywhere, and `SmtpEmailSender` has never been exercised against a real
+  mail server.
 - **The liability-disclaimer consent record is real (tamper-evident, tied to a server-verified
   token subject, tenant-scoped, and — since `ConsentLedger` — an O(1) indexed lookup rather than a
   WAL scan) but its supporting infrastructure is still minimal.** The WAL's signing key is a

@@ -89,3 +89,34 @@ class TestSqlAlchemyUserRepository:
         assert fetched is not None
         assert fetched.tenant_id == user.tenant_id
         await second.close()
+
+    async def test_list_by_tenant_returns_only_that_tenants_users(self, repo):
+        a = _user(email="alice@example.com", tenant_id="tenant-a")
+        b = _user(email="bob@example.com", tenant_id="tenant-a")
+        c = _user(email="carol@example.com", tenant_id="tenant-b")
+        await repo.add(a)
+        await repo.add(b)
+        await repo.add(c)
+
+        members = await repo.list_by_tenant("tenant-a")
+        assert {m.email for m in members} == {"alice@example.com", "bob@example.com"}
+
+    async def test_list_by_tenant_empty_when_no_users(self, repo):
+        assert await repo.list_by_tenant("tenant-a") == []
+
+    async def test_remove_deletes_the_user(self, repo):
+        user = _user()
+        await repo.add(user)
+        await repo.remove(user.email)
+        assert await repo.get_by_email(user.email) is None
+
+    async def test_remove_missing_user_is_a_safe_noop(self, repo):
+        await repo.remove("nobody@example.com")  # should not raise
+
+    async def test_remove_does_not_affect_other_users(self, repo):
+        a = _user(email="alice@example.com")
+        b = _user(email="bob@example.com")
+        await repo.add(a)
+        await repo.add(b)
+        await repo.remove(a.email)
+        assert (await repo.get_by_email(b.email)) is not None
