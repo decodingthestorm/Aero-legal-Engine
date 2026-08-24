@@ -14,11 +14,22 @@ spec:
     - host: {{ .Values.ingress.host }}
       http:
         paths:
-          - path: /
+          # /api must come before / (a Prefix match on / would otherwise
+          # shadow it): the API service, matching .Values.ui.apiBaseUrl's
+          # default of https://<host>/api baked into the ui image at build
+          # time (see docker/Dockerfile.ui).
+          - path: /api
             pathType: Prefix
             backend:
               service:
                 name: legal-engine-api
+                port:
+                  number: 80
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: legal-engine-ui
                 port:
                   number: 80
 {{- end }}

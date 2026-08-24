@@ -1,0 +1,29 @@
+# Next.js dashboard (ui/). Multi-stage: build with the full node_modules,
+# ship only the standalone server output.
+#
+# NEXT_PUBLIC_API_BASE_URL must be supplied as a build ARG, not a runtime
+# env var: the Pages Router inlines NEXT_PUBLIC_* values into the client
+# bundle at `next build` time. Setting it only on the running container (as
+# k8s/templates/ui-deployment.yaml's env: does) has no effect on an
+# already-built image — the API base URL is baked in per image, so changing
+# it means rebuilding, not just redeploying.
+FROM node:20-slim AS build
+WORKDIR /app
+ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
+COPY ui/package.json ui/package-lock.json* ./
+RUN npm install
+COPY ui/ ./
+RUN npm run build
+
+FROM node:20-slim AS run
+WORKDIR /app
+ENV NODE_ENV=production
+COPY --from=build /app/.next ./.next
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/package.json ./package.json
+COPY --from=build /app/next.config.js ./next.config.js
+COPY --from=build /app/public ./public
+
+EXPOSE 3000
+CMD ["npm", "run", "start"]

@@ -33,7 +33,10 @@ class TestVerificationRoute:
         }
         response = client.post("/verification/verify", json=body)
         assert response.status_code == 200
-        assert response.json()["satisfiable"] is True
+        data = response.json()
+        assert data["proof_result"]["satisfiable"] is True
+        assert data["smt_lib2"].startswith("(declare-datatypes")
+        assert "Owns" in data["smt_lib2"]
 
     def test_verify_unsatisfiable_formula(self, client):
         body = {
@@ -54,7 +57,7 @@ class TestVerificationRoute:
         }
         response = client.post("/verification/verify", json=body)
         assert response.status_code == 200
-        assert response.json()["satisfiable"] is False
+        assert response.json()["proof_result"]["satisfiable"] is False
 
     def test_verify_rejects_unbound_variable_with_400(self, client):
         body = {

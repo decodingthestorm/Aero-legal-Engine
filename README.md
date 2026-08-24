@@ -2,7 +2,11 @@
 
 A legal ingestion, formal verification, and game-theoretic statutory optimization platform.
 
-## What's built so far (Phases 1-4)
+v1.0.0 marks the completion of the 5-phase build plan below: every subsystem the original spec
+called for exists and has a passing test suite. It does **not** mean "battle-tested production
+system" — see [Known limitations](#known-limitations) for what that would still take.
+
+## What's built
 
 - **`core/`** — shared Pydantic v2 models (statutes, jurisdiction tiers, actors, payoff
   matrices, proof results, WAL entries), settings, exceptions, structured logging.
@@ -54,31 +58,66 @@ A legal ingestion, formal verification, and game-theoretic statutory optimizatio
   which this environment doesn't have, but the task *logic* needs nothing infra-specific to test.
 - **`api/`** — a working FastAPI gateway wiring every subsystem above into HTTP endpoints:
   `/verification/verify` (accepts a JSON mirror of the EPR formula AST, a discriminated union on
-  `kind`), `/simulation/penalty` and `/simulation/trembling-hand`, `/refactoring/detect-loopholes`,
-  `/graph/statutes` + `/graph/preemption/{entity_id}` + `/graph/search`, and `/ingestion/jobs`.
-  Every route depends on the knowledge_graph Protocol interfaces rather than concrete classes, so
-  swapping in the Neo4j/Qdrant/sentence-transformers backends for production is a one-line change
-  in `main.py`'s `lifespan`, not a change to any route. There's no Postgres/JWT auth wired up yet
-  — this is an in-process demo gateway, not a hardened production one.
+  `kind`, and returns both the `ProofResult` and the rendered SMT-LIB2 text), `/simulation/penalty`
+  and `/simulation/trembling-hand`, `/refactoring/detect-loopholes`, `/graph/statutes` +
+  `/graph/preemption/{entity_id}` + `/graph/search`, `/ingestion/jobs`, and `/auth/token`.
+  Every route depends on the knowledge_graph Protocol interfaces rather than concrete classes;
+  which concrete class each resolves to is decided by `knowledge_graph/factory.py`, itself driven
+  by `core.config.settings` (`graph_backend`/`vector_backend`/`embedding_backend`) — swapping in
+  Neo4j/Qdrant/sentence-transformers for production is a settings change, not a code change.
+  Auth is a real (if deliberately simple — a dependency-free HS256 JWT implementation rather than
+  pulling in PyJWT for a few dozen lines) bearer-token check, off by default via
+  `settings.api_auth_enabled` so it doesn't get in the way of local development or most of the
+  test suite. There's still no Postgres-backed persistence — this is an in-process demo gateway,
+  not a hardened production one; see Known limitations.
+- **`ui/`** — a Next.js (Pages Router, TypeScript, Tailwind) dashboard: `ProofInspector` (submit a
+  clause, see the `ProofResult` and its SMT-LIB2 rendering), `SimulationCard` (deterrence-penalty
+  calculator plus an SVG-rendered convex penalty curve), and `GraphViewer` (add a statute, resolve
+  preemption for an entity, semantic search) — all talking to the real API via a typed client
+  (`src/lib/api.ts`). **This code was written without Node.js available in the environment it was
+  built in, so it has never been locally installed, type-checked, built, or run in a browser** —
+  see Known limitations before relying on it. The `ui` job in `.github/workflows/ci.yml` runs
+  `npm install && npm run build` (which type-checks) on every push, so that's the first real
+  verification this code gets.
 
-Everything above has a passing unit and integration test suite under `tests/`, including an
-end-to-end test (`tests/integration/test_ingest_to_proof.py`) that ingests a mocked ordinance,
-ties it into the knowledge graph, formally verifies a rule derived from it, records every step to
-the WAL, and confirms the resulting chain both verifies and detects tampering.
+Everything under `src/legal_engine/` (i.e. everything except `ui/`) has a passing unit and
+integration test suite under `tests/`, including an end-to-end test
+(`tests/integration/test_ingest_to_proof.py`) that ingests a mocked ordinance, ties it into the
+knowledge graph, formally verifies a rule derived from it, records every step to the WAL, and
+confirms the resulting chain both verifies and detects tampering.
 
 Each optional "real backend" (Neo4j, Qdrant, sentence-transformers, Tesseract OCR) is behind a
 lazy import and an install extra (e.g. `pip install -e ".[graph-neo4j,vector-qdrant,semantic,ocr]"`)
-— the default, tested path never requires them. `api` and `workers` are deployment-role extras
-(a library-only user shouldn't need FastAPI or Celery pulled in) rather than lazy-backend extras;
-CI installs both to cover their tests.
+— the default, tested path never requires them, and selecting one without its extra installed
+fails with a clear `pip install` message rather than a confusing stack trace (this held even when
+one of those "optional" dependencies turned out to already be installed in a broken state — see
+git history on `knowledge_graph/embeddings.py` for what that surfaced). `api` and `workers` are
+deployment-role extras (a library-only user shouldn't need FastAPI or Celery pulled in) rather
+than lazy-backend extras; CI installs both to cover their tests.
 
-## Not yet implemented
+## Known limitations
 
-`ui/` (Next.js dashboard) and the Kubernetes/CI release pipeline are scaffolded (directory
-structure + stub components) but not built out yet — see the phased plan below. Also still
-missing: real Postgres-backed persistence, JWT auth on the API, and a settings-driven factory for
-swapping the in-memory knowledge_graph backends for their Neo4j/Qdrant/sentence-transformers
-counterparts at deploy time (the classes exist; nothing wires them up yet based on environment).
+Read this before treating any of the above as more finished than it is:
+
+- **The UI is unverified.** No Node.js in the build environment means no local `npm install`,
+  `tsc`, `next build`, or browser test ever ran against it. It's written carefully against the
+  real, tested API contracts, but "compiles" and "renders correctly" are different claims — only
+  CI's `ui` job (or a human running `make ui-install && make ui-dev`) has actually checked the
+  former, and nothing has checked the latter yet.
+- **No Postgres-backed persistence.** `core/config.py` has a `postgres_dsn` setting and
+  `docker-compose.yml` runs a Postgres container, but nothing reads or writes to it — all state
+  (the knowledge graph, the vector index) lives in the API process's memory and is lost on
+  restart, unless you configure the Neo4j/Qdrant backends via `knowledge_graph/factory.py`.
+- **Auth is deliberately minimal.** One hardcoded client_id/client_secret pair
+  (`settings.api_client_id`/`api_client_secret`), no user/tenant model, no token revocation, no
+  refresh tokens. Fine for a demo gateway; not what you'd want fronting anything real.
+- **No load testing.** The original spec's Phase 5 called for it; building a real load-testing
+  setup (Locust/k6 scenarios, target throughput numbers tied to the 480ms Z3 timeout budget) is
+  meaningfully separate work that wasn't attempted here.
+- **The "formal verification" and "game-theoretic guarantees" are real math, not legal advice.**
+  The EPR compiler and Z3 solver pool genuinely check what you give them; whether a hand-authored
+  clause correctly captures what a statute means is a legal-drafting judgment call this system
+  doesn't make for you (see `formal_logic/disambiguator.py`'s docstring).
 
 ## Development
 
@@ -89,10 +128,18 @@ pip install -e ".[dev,api,workers]"   # api/workers extras needed for the full t
 pytest
 ```
 
+For the UI (requires Node.js 20+, which — see Known limitations — has never actually been run
+against this code):
+
+```bash
+make ui-install
+make ui-dev   # http://localhost:3000, expects the API at NEXT_PUBLIC_API_BASE_URL (default :8000)
+```
+
 ## Phased build plan
 
 1. **Core schemas, formal logic & game theory** — done.
 2. **Hybrid knowledge graph & preemption resolver** — done.
 3. **Ingestion subsystem & structured parsers (polite crawling)** — done.
 4. **State ledger (WAL), Celery workers & FastAPI gateway** — done.
-5. Production infrastructure, Next.js UI & release.
+5. **Production infrastructure, Next.js UI & release** — done, with the caveats above.

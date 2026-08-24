@@ -31,3 +31,28 @@ jobs:
 
       - name: Property tests
         run: pytest tests/property -v
+
+  ui:
+    runs-on: ubuntu-latest
+    # This job is the actual verification that ui/ compiles and type-checks
+    # cleanly: it was written without Node.js available locally (see
+    # README.md's "Known limitations" section), so `next build`'s type
+    # checking here — not a local run — is what first proves it out.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          # No cache: "npm" here - there's no package-lock.json yet (npm
+          # was never run to generate one in this environment); add it back
+          # once one exists and is committed.
+
+      - name: Install dependencies
+        working-directory: ui
+        run: npm install
+
+      - name: Build (includes TypeScript type-checking)
+        working-directory: ui
+        run: npm run build

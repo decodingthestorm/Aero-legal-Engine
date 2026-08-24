@@ -1,7 +1,8 @@
-.PHONY: install test test-unit test-integration test-property lint typecheck fmt run-api run-worker docker-up docker-down
+.PHONY: install test test-unit test-integration test-property lint typecheck fmt run-api run-worker \
+	ui-install ui-dev ui-build docker-up docker-down
 
 install:
-	pip install -e ".[dev]"
+	pip install -e ".[dev,api,workers]"
 
 test:
 	pytest
@@ -29,6 +30,15 @@ run-api:
 
 run-worker:
 	celery -A legal_engine.workers.celery_app worker --loglevel=info
+
+ui-install:
+	cd ui && npm install
+
+ui-dev:
+	cd ui && npm run dev
+
+ui-build:
+	cd ui && npm run build
 
 docker-up:
 	docker compose -f docker/docker-compose.yml up -d

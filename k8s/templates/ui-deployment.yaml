@@ -1,0 +1,44 @@
+# NOTE: .Values.ui.apiBaseUrl below sets NEXT_PUBLIC_API_BASE_URL as a
+# *runtime* container env var, which the Next.js Pages Router build already
+# inlined into the client bundle at image-build time (see
+# docker/Dockerfile.ui's ARG NEXT_PUBLIC_API_BASE_URL) — this env: entry
+# does NOT change what's already baked into the served JS. It's kept here
+# so the value is visible/auditable alongside the deployment and available
+# to any server-side code that reads it, but changing .Values.ui.apiBaseUrl
+# for a different environment requires rebuilding the ui image with the
+# matching build ARG, not just a Helm upgrade.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: legal-engine-ui
+spec:
+  replicas: {{ .Values.ui.replicaCount }}
+  selector:
+    matchLabels:
+      app: legal-engine-ui
+  template:
+    metadata:
+      labels:
+        app: legal-engine-ui
+    spec:
+      containers:
+        - name: ui
+          image: "{{ .Values.ui.image.repository }}:{{ .Values.ui.image.tag }}"
+          ports:
+            - containerPort: {{ .Values.ui.port }}
+          env:
+            - name: NEXT_PUBLIC_API_BASE_URL
+              value: {{ .Values.ui.apiBaseUrl | quote }}
+          resources:
+            {{- toYaml .Values.ui.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: legal-engine-ui
+spec:
+  selector:
+    app: legal-engine-ui
+  ports:
+    - port: 80
+      targetPort: {{ .Values.ui.port }}

@@ -4,8 +4,10 @@ Accepts a JSON mirror of the EPR formula AST (ast_nodes.py) — a
 discriminated union on ``kind`` mirroring Constant/Variable/Atom/Not/And/
 Or/Implies — compiles it via epr_compiler.compile_epr_formula (which
 enforces the EPR decidability constraints and raises NotEPRFragmentError,
-mapped to a 400 by api/middleware.py, on any violation), and checks it via
-the shared SolverPool.
+mapped to a 400 by api/middleware.py, on any violation), checks it via the
+shared SolverPool, and also renders it as SMT-LIB2 text (smt_generator.py)
+so a caller — namely ui/'s ProofInspector, "SMT-LIB2 AST & Z3 result
+inspector" — has something to actually inspect alongside the verdict.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from legal_engine.api.dependencies import SolverPoolDep
 from legal_engine.core.models import ProofResult
 from legal_engine.formal_logic import ast_nodes
 from legal_engine.formal_logic.epr_compiler import compile_epr_formula
+from legal_engine.formal_logic.smt_generator import generate_smt_lib2
 
 router = APIRouter()
 
@@ -103,8 +106,13 @@ class VerifyClauseRequest(BaseModel):
     domain: list[str]
 
 
-@router.post("/verify", response_model=ProofResult)
-async def verify_clause(request: VerifyClauseRequest, solver_pool: SolverPoolDep) -> ProofResult:
+class VerifyClauseResponse(BaseModel):
+    proof_result: ProofResult
+    smt_lib2: str
+
+
+@router.post("/verify", response_model=VerifyClauseResponse)
+async def verify_clause(request: VerifyClauseRequest, solver_pool: SolverPoolDep) -> VerifyClauseResponse:
     matrix = _formula_from_schema(request.matrix)
     formula = compile_epr_formula(
         exists_vars=tuple(request.exists_vars),
@@ -112,7 +120,9 @@ async def verify_clause(request: VerifyClauseRequest, solver_pool: SolverPoolDep
         matrix=matrix,
         domain=tuple(request.domain),
     )
+    smt_lib2 = generate_smt_lib2(formula)
     # SolverPool.check is a blocking (threading-based) call that can take up
     # to the configured Z3 timeout; run it off the event loop so one slow
     # verification doesn't stall every other in-flight request.
-    return await run_in_threadpool(solver_pool.check, formula)
+    proof_result = await run_in_threadpool(solver_pool.check, formula)
+    return VerifyClauseResponse(proof_result=proof_result, smt_lib2=smt_lib2)

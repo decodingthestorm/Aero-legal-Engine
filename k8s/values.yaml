@@ -25,6 +25,21 @@ worker:
       cpu: "1"
       memory: 1Gi
 
+ui:
+  image:
+    repository: ghcr.io/example/legal-engine/ui
+    tag: latest
+  replicaCount: 2
+  port: 3000
+  apiBaseUrl: https://legal-engine.example.com/api
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
 ingress:
   enabled: true
   host: legal-engine.example.com
