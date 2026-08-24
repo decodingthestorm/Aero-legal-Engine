@@ -82,7 +82,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Legal Engine Platform API", version="1.2.0", lifespan=lifespan)
+    app = FastAPI(title="Legal Engine Platform API", version="1.2.1", lifespan=lifespan)
     add_middleware(app)
 
     # /auth/token and /legal/disclaimer must stay unprotected (the former is

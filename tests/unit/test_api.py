@@ -185,6 +185,75 @@ class TestRefactoringRoute:
         assert data["loopholes"][0]["total_weight"] == pytest.approx(-2.0)
         assert data["corrections"]["shell_co_a->shell_co_b"] == pytest.approx(1.0)
 
+    def test_sparse_patch_touches_only_the_shared_edge(self, client):
+        """Same reconvergent-diamond shape as
+        tests/unit/test_sparse_optimizer.py's real cvxpy tests — two
+        triangular cycles sharing one edge, where L1 minimization can zero
+        every edge except the shared one."""
+        body = {
+            "edges": [
+                {"source": "a", "target": "b", "weight": 2.0},
+                {"source": "b", "target": "d", "weight": 2.0},
+                {"source": "a", "target": "c", "weight": 2.0},
+                {"source": "c", "target": "d", "weight": 2.0},
+                {"source": "d", "target": "a", "weight": -10.0},
+            ]
+        }
+        response = client.post("/refactoring/sparse-patch", json=body)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["edges_changed"] == 1
+        assert data["corrections"]["d->a"] == pytest.approx(6.0, abs=1e-3)
+        assert data["corrections"]["a->b"] == pytest.approx(0.0, abs=1e-3)
+
+    def test_sparse_patch_respects_max_delta(self, client):
+        body = {
+            "edges": [
+                {"source": "a", "target": "b", "weight": 2.0},
+                {"source": "b", "target": "d", "weight": 2.0},
+                {"source": "a", "target": "c", "weight": 2.0},
+                {"source": "c", "target": "d", "weight": 2.0},
+                {"source": "d", "target": "a", "weight": -10.0},
+            ],
+            "max_delta": 4.0,
+        }
+        response = client.post("/refactoring/sparse-patch", json=body)
+        assert response.status_code == 200
+        assert max(abs(v) for v in response.json()["corrections"].values()) <= 4.0 + 1e-3
+
+    def test_sparse_patch_infeasible_bound_returns_400(self, client):
+        body = {
+            "edges": [
+                {"source": "a", "target": "b", "weight": 2.0},
+                {"source": "b", "target": "d", "weight": 2.0},
+                {"source": "a", "target": "c", "weight": 2.0},
+                {"source": "c", "target": "d", "weight": 2.0},
+                {"source": "d", "target": "a", "weight": -10.0},
+            ],
+            "max_delta": 0.5,
+        }
+        response = client.post("/refactoring/sparse-patch", json=body)
+        assert response.status_code == 400
+        assert response.json()["error"] == "UnbalancedCycleError"
+
+    def test_sparse_patch_returns_503_when_cvxpy_unavailable(self, client, monkeypatch):
+        import builtins
+
+        real_import = builtins.__import__
+
+        def _blocked_import(name, *args, **kwargs):
+            if name == "cvxpy":
+                raise ImportError("No module named 'cvxpy'")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", _blocked_import)
+
+        response = client.post(
+            "/refactoring/sparse-patch",
+            json={"edges": [{"source": "a", "target": "b", "weight": -3.0}]},
+        )
+        assert response.status_code == 503
+
 
 class TestGraphRoutes:
     def test_add_statute_and_resolve_preemption(self, client):

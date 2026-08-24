@@ -13,8 +13,17 @@ see "Multi-tenant data isolation" below), not just a token check; and the liabil
 one-time, per-tenant, cryptographically-logged disclaimer acceptance (see "Liability disclaimer &
 consent" below), not a per-request header or a client-side modal — both of those were assessed and
 rejected as security theater (client-controlled, no enforcement teeth, easy to characterize as
-manufactured compliance rather than genuine consent) before building what's here instead. This
-still doesn't mean "battle-tested production system" — read on for what would still take.
+manufactured compliance rather than genuine consent) before building what's here instead. v1.2.1
+adds an $L_1$-sparse alternative to `refactoring/`'s existing minimum-norm loophole correction —
+one deliberately narrow, self-contained slice of a much larger proposed roadmap (neuro-symbolic
+LLM ingestion, modal deontic/temporal/epistemic logic, multi-agent reinforcement learning, ZK-SNARK
+compliance proofs, HSM-backed signing, Kubernetes autoscaling) that was assessed and **not**
+pursued wholesale: several of those pillars would either compromise the EPR core's decidability
+guarantee (modal logic's Kripke semantics generically require quantifier alternation outside the
+`exists*-forall*` fragment `formal_logic/` has guaranteed since Phase 1) or require cloud
+infrastructure (Kubernetes, HSM/KMS, managed Neo4j/Qdrant clusters) this environment has no way to
+build *or verify*, which is not how anything else in this codebase has been built. This still
+doesn't mean "battle-tested production system" — read on for what would still take.
 
 ## What's built
 
@@ -28,7 +37,20 @@ still doesn't mean "battle-tested production system" — read on for what would 
   checks, and a numeric Trembling Hand Perfect Equilibrium check.
 - **`refactoring/`** — builds statutory/tax dependency graphs, finds negative-weight loophole
   cycles (Tarjan SCC + Johnson simple-cycle enumeration), and solves the cycle-basis system
-  `B @ w = 0` to zero them out with a minimum-norm correction.
+  `B @ w = 0` to zero them out. Two correction strategies over the same constraint:
+  `zero_arbitrage.py`'s minimum-*L2*-norm least-squares solve (spreads the fix a little across
+  every edge — closest to the original values, but not something a regulator could actually pass
+  as a bill), and `sparse_optimizer.py`'s minimum-*L1*-norm solve via `cvxpy` (a Lasso/compressed-
+  sensing reformulation of the identical constraint that drives most edges to exactly zero,
+  producing a "surgical" patch that changes as few clauses as possible — see
+  `tests/unit/test_sparse_optimizer.py` for a concrete, non-degenerate example where L1 changes 1
+  edge and L2 changes all 5 to satisfy the same two constraints). `cvxpy` is a lazy-imported
+  optional dependency (the `sparse-opt` extra) using only its bundled open-source LP solvers, not
+  the commercial MOSEK some cvxpy examples default to — L1-minimization under linear equality
+  constraints is a linear program, nothing here needs a paid solver license. Exposed via
+  `POST /refactoring/sparse-patch` alongside the existing `/detect-loopholes`, with an optional
+  `max_delta` per-edge bound and a 503 (not 400) when `cvxpy` isn't installed on a given
+  deployment — a missing capability, not a bad request.
 - **`knowledge_graph/`** — a statute/entity graph (`GraphService`, NetworkX-backed by default,
   Neo4j-backed implementation included but untested here), text embeddings (`Embedder`,
   deterministic hashing-based by default, real all-MiniLM-L6-v2 wrapper included but not
@@ -77,7 +99,7 @@ still doesn't mean "battle-tested production system" — read on for what would 
 - **`api/`** — a working FastAPI gateway wiring every subsystem above into HTTP endpoints:
   `/verification/verify` (accepts a JSON mirror of the EPR formula AST, a discriminated union on
   `kind`, and returns both the `ProofResult` and the rendered SMT-LIB2 text), `/simulation/penalty`
-  and `/simulation/trembling-hand`, `/refactoring/detect-loopholes`, `/graph/statutes` +
+  and `/simulation/trembling-hand`, `/refactoring/detect-loopholes` + `/refactoring/sparse-patch`, `/graph/statutes` +
   `/graph/preemption/{entity_id}` + `/graph/search`, `/ingestion/jobs`, `/auth/token`, and
   `/legal/disclaimer` + `/legal/accept` (see "Liability disclaimer & consent" below).
   Every route depends on the knowledge_graph Protocol interfaces rather than concrete classes;

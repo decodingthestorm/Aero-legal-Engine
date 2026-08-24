@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "legal-engine"
-version = "1.2.0"
+version = "1.2.1"
 description = "Distributed legal ingestion, formal verification, and game-theoretic statutory optimization platform"
 requires-python = ">=3.11"
 readme = "README.md"
@@ -51,6 +51,12 @@ ocr = ["pytesseract>=0.3.10", "pdf2image>=1.17.0"]
 # at persistence/sql_repository.py's module level, not lazily deferred like
 # the backends above.
 postgres = ["sqlalchemy>=2.0.0", "asyncpg>=0.29.0"]
+# refactoring/sparse_optimizer.py's L1-sparse patch solver. Deliberately
+# excludes MOSEK (the commercial solver some cvxpy examples default to) —
+# L1-minimization under linear equality constraints is a linear program,
+# fully solvable by cvxpy's bundled open-source solvers, no paid license
+# needed.
+sparse-opt = ["cvxpy>=1.4.0"]
 # Deployment-role splits, not lazy-import backends: a batch/library-only
 # user of formal_logic/game_theory shouldn't need a web framework or task
 # queue pulled in. CI installs both to cover api/ and workers/ in tests.
@@ -62,7 +68,7 @@ workers = ["celery>=5.3.6", "redis>=5.0.1"]
 load-test = ["locust>=2.20.0"]
 
 all = [
-    "legal-engine[semantic,vector-qdrant,graph-neo4j,js-rendering,ocr,postgres,api,workers,load-test]",
+    "legal-engine[semantic,vector-qdrant,graph-neo4j,js-rendering,ocr,postgres,sparse-opt,api,workers,load-test]",
 ]
 
 dev = [

@@ -18,7 +18,15 @@ jobs:
           cache: "pip"
 
       - name: Install dependencies
-        run: pip install -e ".[dev,api,workers]"
+        # sparse-opt (cvxpy) is included here, not just left to skip
+        # everywhere: it fails to import in the Windows environment this
+        # was developed in (see refactoring/sparse_optimizer.py's module
+        # docstring — an Application Control policy blocks a native DLL
+        # several layers into its import chain), which is a Windows-
+        # specific problem this Ubuntu runner doesn't have, so this is
+        # where tests/unit/test_sparse_optimizer.py's real-computation
+        # tests actually get to run for real instead of skipping.
+        run: pip install -e ".[dev,api,workers,sparse-opt]"
 
       - name: Lint
         run: ruff check src tests
