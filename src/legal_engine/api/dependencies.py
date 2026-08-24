@@ -25,7 +25,7 @@ from typing import Annotated
 from fastapi import Depends, HTTPException, Request, status
 
 from legal_engine.api.security import InvalidTokenError, get_token_tenant, verify_token
-from legal_engine.compliance.consent import DISCLAIMER_VERSION, has_accepted_current_disclaimer
+from legal_engine.compliance.consent import DISCLAIMER_VERSION, ConsentLedger
 from legal_engine.core.config import settings
 from legal_engine.core.wal import WriteAheadLog
 from legal_engine.formal_logic.solver_pool import SolverPool
@@ -93,6 +93,10 @@ def get_wal(request: Request) -> WriteAheadLog:
     return request.app.state.wal
 
 
+def get_consent_ledger(request: Request) -> ConsentLedger:
+    return request.app.state.consent_ledger
+
+
 async def require_auth(request: Request) -> str | None:
     """No-ops (returns None) when settings.api_auth_enabled is False — the
     default, and what every other test in this suite runs against. When
@@ -116,12 +120,12 @@ async def require_consent(request: Request, tenant_id: Annotated[str, Depends(ge
     require_auth/get_current_tenant — consent enforcement only means
     anything once requests are tied to a real, identified tenant. When
     enabled, 403s unless that tenant has an acceptance-of-the-current-
-    disclaimer-version entry on record in the WAL (see
-    compliance/consent.py, POST /legal/accept)."""
+    disclaimer-version entry on record (see compliance/consent.py's
+    ConsentLedger, POST /legal/accept)."""
     if not settings.api_auth_enabled:
         return
-    wal: WriteAheadLog = request.app.state.wal
-    if not has_accepted_current_disclaimer(wal, tenant_id):
+    ledger: ConsentLedger = request.app.state.consent_ledger
+    if not ledger.has_accepted_current_disclaimer(tenant_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=(
@@ -138,4 +142,5 @@ SolverPoolDep = Annotated[SolverPool, Depends(get_solver_pool)]
 FetcherDep = Annotated[PoliteFetcher, Depends(get_fetcher)]
 StatuteRepositoryDep = Annotated[StatuteRepository, Depends(get_statute_repository)]
 WalDep = Annotated[WriteAheadLog, Depends(get_wal)]
+ConsentLedgerDep = Annotated[ConsentLedger, Depends(get_consent_ledger)]
 TenantIdDep = Annotated[str, Depends(get_current_tenant)]

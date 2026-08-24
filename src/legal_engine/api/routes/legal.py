@@ -17,13 +17,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from legal_engine.api.dependencies import TenantIdDep, WalDep, require_auth
-from legal_engine.compliance.consent import (
-    DISCLAIMER_TEXT,
-    DISCLAIMER_VERSION,
-    has_accepted_current_disclaimer,
-    record_acceptance,
-)
+from legal_engine.api.dependencies import ConsentLedgerDep, TenantIdDep, require_auth
+from legal_engine.compliance.consent import DISCLAIMER_TEXT, DISCLAIMER_VERSION
 
 router = APIRouter()
 
@@ -48,11 +43,11 @@ async def get_disclaimer() -> DisclaimerResponse:
 async def accept_disclaimer(
     tenant_id: TenantIdDep,
     subject: Annotated[str | None, Depends(require_auth)],
-    wal: WalDep,
+    ledger: ConsentLedgerDep,
 ) -> AcceptanceResponse:
-    already = has_accepted_current_disclaimer(wal, tenant_id)
+    already = ledger.has_accepted_current_disclaimer(tenant_id)
     if not already:
-        record_acceptance(wal, tenant_id, subject=subject or tenant_id)
+        ledger.record_acceptance(tenant_id, subject=subject or tenant_id)
     return AcceptanceResponse(
         tenant_id=tenant_id, disclaimer_version=DISCLAIMER_VERSION, already_accepted=already
     )

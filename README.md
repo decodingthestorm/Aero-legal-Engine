@@ -22,8 +22,11 @@ pursued wholesale: several of those pillars would either compromise the EPR core
 guarantee (modal logic's Kripke semantics generically require quantifier alternation outside the
 `exists*-forall*` fragment `formal_logic/` has guaranteed since Phase 1) or require cloud
 infrastructure (Kubernetes, HSM/KMS, managed Neo4j/Qdrant clusters) this environment has no way to
-build *or verify*, which is not how anything else in this codebase has been built. This still
-doesn't mean "battle-tested production system" — read on for what would still take.
+build *or verify*, which is not how anything else in this codebase has been built. v1.2.2 pursues
+one more scoped slice of a follow-up version of that same roadmap: `ConsentLedger` (see "Liability
+disclaimer & consent" below) replaces the O(n) full-WAL-scan the consent gate originally ran on
+every request with an O(1) indexed projection, still exactly re-derivable from the WAL alone. This
+still doesn't mean "battle-tested production system" — read on for what would still take.
 
 ## What's built
 
@@ -207,6 +210,18 @@ shipped instead is closer to a real click-through EULA:
   "non-repudiation" here — not the previous proposal's unenforced client-side check, an
   identified-tenant's acceptance in a hash-chained, Ed25519-signed log that a forgery attempt is
   cryptographically detectable in.
+- **`ConsentLedger`** (`compliance/consent.py`) — a read-optimized `tenant_id -> most recent
+  acceptance` projection over the WAL, replacing this feature's original implementation, which
+  answered `has_accepted_current_disclaimer` by scanning every entry in the WAL on every single
+  gated request. The WAL stays the sole source of truth (the index is built by replaying
+  `wal.entries()` once at startup and updated incrementally on every new `record_acceptance` call,
+  never re-scanned), and every `ConsentRecord` carries a `wal_sequence` back-reference to the exact
+  signed entry it was derived from — a cached "yes, this tenant accepted" answer is always
+  traceable to one specific entry, not just trusted at face value.
+  `tests/unit/test_consent.py::TestConsentLedgerReplay` proves the actual property that justifies
+  calling it a projection rather than a second source of truth: a fresh `ConsentLedger` constructed
+  over a WAL that already has entries (the real case after a process restart) reconstructs
+  identical state to one that was live for every write.
 
 `tests/integration/test_legal_consent_gate.py` proves this end-to-end: verification/simulation
 403 before acceptance, 200 after; `GET /legal/disclaimer` needs no token; acceptance for one
@@ -217,9 +232,12 @@ about.
 **What this still isn't**: the WAL's signing key is persisted to disk unencrypted
 (`load_or_create_signing_key` in `core/wal.py`) — real production hardening wants that in a
 secrets manager/KMS, not a bare file next to the log it signs, the same gap this codebase's other
-plaintext-default secrets (`jwt_secret`, `api_client_secret`) already have. And `has_accepted_current_disclaimer`
-scans every WAL entry on each gated request — fine at this system's current scale, not something
-that's been load-tested the way `/verification/verify` has (see "Load testing" below).
+plaintext-default secrets (`jwt_secret`, `api_client_secret`) already have. The consent check itself
+is now O(1) (`ConsentLedger`, above) rather than an O(n) WAL scan, but the ledger is still an
+in-process, in-memory projection rebuilt by a single full replay at startup — fine at this system's
+current scale (and current WAL size), not something that's been load-tested the way
+`/verification/verify` has (see "Load testing" below), and not yet a persisted index of its own
+(a restart replays the whole WAL again, rather than resuming from a snapshot).
 - **`ui/`** — a Next.js (Pages Router, TypeScript, Tailwind) dashboard: `ProofInspector` (submit a
   clause, see the `ProofResult` and its SMT-LIB2 rendering), `SimulationCard` (deterrence-penalty
   calculator plus an SVG-rendered convex penalty curve), and `GraphViewer` (add a statute, resolve
@@ -357,13 +375,15 @@ Read this before treating any of the above as more finished than it is:
   what's needed is a user/tenant registry (sign-up, credential issuance, tenant provisioning), which
   is a genuine feature to build deliberately, not a drop-in.
 - **The liability-disclaimer consent record is real (tamper-evident, tied to a server-verified
-  token subject, tenant-scoped) but its supporting infrastructure is minimal.** The WAL's Ed25519
-  signing key is a plaintext file on disk (`load_or_create_signing_key`) — fine for this
-  environment, not where a real deployment wants its signing key. There's no way to revoke or
-  amend an acceptance once recorded (append-only is the point, but that also means no "the tenant's
-  authorized signer changed" flow exists yet), and the disclaimer-check scans the full WAL on every
-  gated request rather than something indexed — untested at any real scale. See "Liability
-  disclaimer & consent" above for what it does establish.
+  token subject, tenant-scoped, and — since `ConsentLedger` — an O(1) indexed lookup rather than a
+  WAL scan) but its supporting infrastructure is still minimal.** The WAL's Ed25519 signing key is
+  a plaintext file on disk (`load_or_create_signing_key`) — fine for this environment, not where a
+  real deployment wants its signing key. There's no way to revoke or amend an acceptance once
+  recorded (append-only is the point, but that also means no "the tenant's authorized signer
+  changed" flow exists yet), and `ConsentLedger` itself is an in-process index rebuilt by a full
+  WAL replay at every startup, not a persisted index of its own — untested at any real scale (WAL
+  size, replay time, or concurrent tenant count). See "Liability disclaimer & consent" above for
+  what it does establish.
 - **Load testing has been run a few times, at up to 300 concurrent users, on one machine.** That's
   real evidence the concurrency fix holds, that the Z3 timeout budget is respected even under heavy
   queueing, and that larger response payloads don't change that — it is not evidence of behavior at

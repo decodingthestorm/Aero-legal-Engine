@@ -28,6 +28,7 @@ from legal_engine.api.routes import (
     simulation,
     verification,
 )
+from legal_engine.compliance.consent import ConsentLedger
 from legal_engine.core.config import settings
 from legal_engine.core.logging import configure_logging, get_logger
 from legal_engine.core.wal import WriteAheadLog, load_or_create_signing_key
@@ -67,6 +68,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     wal_dir = Path(settings.wal_path)
     signing_key = load_or_create_signing_key(wal_dir / "signing_key.bin")
     app.state.wal = WriteAheadLog(signing_key, path=wal_dir / "audit.jsonl")
+    # Replays app.state.wal's existing legal_disclaimer_accepted entries
+    # once here, so every gated request afterward is an O(1) dict lookup
+    # instead of a rescan — see compliance/consent.py's ConsentLedger.
+    app.state.consent_ledger = ConsentLedger(app.state.wal)
 
     rehydrated_count = await hydrate_indexes(
         app.state.statute_repository, app.state.tenant_registry, app.state.embedder
@@ -82,7 +87,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Legal Engine Platform API", version="1.2.1", lifespan=lifespan)
+    app = FastAPI(title="Legal Engine Platform API", version="1.2.2", lifespan=lifespan)
     add_middleware(app)
 
     # /auth/token and /legal/disclaimer must stay unprotected (the former is
