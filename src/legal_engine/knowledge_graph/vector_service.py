@@ -15,7 +15,7 @@ match the spec's ``D_cosine <= 0.18`` match threshold
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 from uuid import UUID
 
 import numpy as np
@@ -27,7 +27,7 @@ from legal_engine.core.config import settings
 class VectorMatch:
     id: UUID
     distance: float
-    metadata: dict
+    metadata: dict[str, Any]
 
     @property
     def is_match(self) -> bool:
@@ -35,7 +35,7 @@ class VectorMatch:
 
 
 class VectorIndex(Protocol):
-    def upsert(self, id: UUID, vector: list[float], metadata: dict) -> None: ...
+    def upsert(self, id: UUID, vector: list[float], metadata: dict[str, Any]) -> None: ...
 
     def search(self, query_vector: list[float], top_k: int = 10) -> list[VectorMatch]: ...
 
@@ -54,9 +54,9 @@ class InMemoryVectorIndex:
 
     def __init__(self) -> None:
         self._vectors: dict[UUID, np.ndarray] = {}
-        self._metadata: dict[UUID, dict] = {}
+        self._metadata: dict[UUID, dict[str, Any]] = {}
 
-    def upsert(self, id: UUID, vector: list[float], metadata: dict) -> None:
+    def upsert(self, id: UUID, vector: list[float], metadata: dict[str, Any]) -> None:
         self._vectors[id] = np.array(vector, dtype=float)
         self._metadata[id] = metadata
 
@@ -88,7 +88,7 @@ class QdrantVectorIndex:
         self._client = QdrantClient(url=url)
         self._collection_name = collection_name
 
-    def upsert(self, id: UUID, vector: list[float], metadata: dict) -> None:
+    def upsert(self, id: UUID, vector: list[float], metadata: dict[str, Any]) -> None:
         from qdrant_client.models import PointStruct
 
         self._client.upsert(

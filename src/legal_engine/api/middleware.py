@@ -16,6 +16,8 @@ import uuid
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.middleware.base import RequestResponseEndpoint
+from starlette.responses import Response
 
 from legal_engine.core.config import settings
 from legal_engine.core.exceptions import LegalEngineError
@@ -40,7 +42,9 @@ def add_middleware(app: FastAPI) -> None:
     )
 
     @app.middleware("http")
-    async def correlation_id_middleware(request: Request, call_next):
+    async def correlation_id_middleware(
+        request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
         correlation_id = request.headers.get("X-Correlation-ID", str(uuid.uuid4()))
         request.state.correlation_id = correlation_id
         response = await call_next(request)

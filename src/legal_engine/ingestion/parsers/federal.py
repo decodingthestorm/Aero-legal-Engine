@@ -46,7 +46,13 @@ def parse_federal_register_xml(xml_text: str, source_url: str | None = None) -> 
             raise ParseError("<DOCUMENT> is missing a citation or title attribute")
 
         text_el = document.find("TEXT")
-        if text_el is None or not (text_el.text or "").strip():
+        # Read .text once and reuse it. Previously the guard treated it as
+        # possibly-None (`text_el.text or ""`) while the construction below
+        # called .strip() on it directly — safe in practice, since the guard
+        # already rejected anything falsy, but the two lines disagreed about
+        # whether None was possible.
+        body = (text_el.text or "").strip() if text_el is not None else ""
+        if not body:
             raise ParseError(f"Document {citation!r} is missing non-empty <TEXT>")
 
         effective_date = None
@@ -65,7 +71,7 @@ def parse_federal_register_xml(xml_text: str, source_url: str | None = None) -> 
                 jurisdiction_tier=JurisdictionTier.FEDERAL,
                 citation=citation,
                 title=title,
-                text=text_el.text.strip(),
+                text=body,
                 source_url=source_url,
                 effective_date=effective_date,
             )

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -119,7 +119,7 @@ class WALEntry(BaseModel):
     payload_hash: str
     signature: str
     event_type: str
-    payload: dict
+    payload: dict[str, Any]
     timestamp: datetime = Field(default_factory=_utcnow)
 
 

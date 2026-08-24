@@ -23,7 +23,7 @@ environment has, so it's implemented but not exercised by tests).
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Any, Protocol, cast
 from uuid import UUID
 
 import networkx as nx
@@ -63,7 +63,7 @@ class NetworkXGraphService:
         node = _statute_node_id(statute_id)
         if node not in self._graph:
             raise KeyError(f"No statute with id {statute_id}")
-        return self._graph.nodes[node]["statute"]
+        return cast(StatuteDocument, self._graph.nodes[node]["statute"])
 
     def statutes_for_entity(self, entity_id: str) -> list[StatuteDocument]:
         entity_node = _entity_node_id(entity_id)
@@ -153,7 +153,7 @@ class Neo4jGraphService:
         )
 
 
-def _create_statute_tx(tx, statute: StatuteDocument, applies_to: list[str]) -> None:
+def _create_statute_tx(tx: Any, statute: StatuteDocument, applies_to: list[str]) -> None:
     tx.run(
         "MERGE (s:Statute {id: $id}) SET s.citation = $citation, s.title = $title, "
         "s.jurisdiction_tier = $tier",

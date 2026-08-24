@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import email.utils
 import time
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Self
@@ -93,7 +94,7 @@ class RateLimiter:
         self._host_locks_guard = asyncio.Lock()
 
     @asynccontextmanager
-    async def throttle(self, host: str):
+    async def throttle(self, host: str) -> AsyncIterator[None]:
         async with self._semaphore:
             host_lock = await self._lock_for_host(host)
             async with host_lock:

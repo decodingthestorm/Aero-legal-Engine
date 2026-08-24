@@ -25,6 +25,7 @@ import hmac
 import json
 import secrets
 import time
+from typing import Any
 from uuid import uuid4
 
 from legal_engine.core.config import settings
@@ -123,7 +124,7 @@ def create_token(
     return f"{header_b64}.{payload_b64}.{_b64url_encode(signature)}"
 
 
-def decode_token(token: str) -> dict:
+def decode_token(token: str) -> dict[str, Any]:
     """Returns the token's full validated payload (including any custom
     claims like ``tenant_id``) if the signature verifies and it hasn't
     expired. Raises InvalidTokenError otherwise."""
@@ -145,7 +146,7 @@ def decode_token(token: str) -> dict:
         raise InvalidTokenError("Token signature does not verify")
 
     try:
-        payload = json.loads(_b64url_decode(payload_b64))
+        payload: dict[str, Any] = json.loads(_b64url_decode(payload_b64))
     except (ValueError, json.JSONDecodeError) as exc:
         raise InvalidTokenError("Token payload is not valid JSON") from exc
 

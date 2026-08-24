@@ -57,16 +57,29 @@ def parse_municipal_html(html: str, source_url: str | None = None) -> list[Statu
     return statutes
 
 
+def _float_attr(element: Tag, name: str) -> float:
+    """BeautifulSoup returns ``list[str]`` rather than ``str`` for
+    attributes it treats as multi-valued, so the raw value isn't
+    necessarily floatable. The TypeError raised here is the same one
+    ``float()`` would have raised on a list, and lands in the same
+    except-clause below — this just makes the narrowing explicit rather
+    than leaving it to a coincidence of what float() rejects."""
+    value = element[name]
+    if not isinstance(value, str):
+        raise TypeError(f"attribute {name!r} is multi-valued: {value!r}")
+    return float(value)
+
+
 def _extract_geo_boundary(article: Tag, citation: str) -> GeoBoundary | None:
     geo_el = article.select_one(".geo-boundary")
     if geo_el is None:
         return None
     try:
         return GeoBoundary(
-            lat_min=float(geo_el["data-lat-min"]),
-            lat_max=float(geo_el["data-lat-max"]),
-            lon_min=float(geo_el["data-lon-min"]),
-            lon_max=float(geo_el["data-lon-max"]),
+            lat_min=_float_attr(geo_el, "data-lat-min"),
+            lat_max=_float_attr(geo_el, "data-lat-max"),
+            lon_min=_float_attr(geo_el, "data-lon-min"),
+            lon_max=_float_attr(geo_el, "data-lon-max"),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise ParseError(f"Ordinance {citation!r} has a malformed .geo-boundary") from exc

@@ -33,6 +33,7 @@ from __future__ import annotations
 import threading
 import time
 import uuid
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 
@@ -67,7 +68,7 @@ def _build_context(formula: EPRFormula, z3_ctx: z3.Context) -> _Z3Context:
     # context would raise "enumeration sort name is already declared" —
     # each check gets its own throwaway sort name regardless.
     sort_name = f"Individual_{uuid.uuid4().hex[:12]}"
-    sort, domain_consts = z3.EnumSort(  # type: ignore[misc]
+    sort, domain_consts = z3.EnumSort(
         sort_name, list(formula.domain), ctx=z3_ctx
     )
     constants = {name: const for name, const in zip(formula.domain, domain_consts)}
@@ -127,7 +128,7 @@ class SolverPool:
         z3.set_param("memory_max_size", memory_limit_mb)
 
     @contextmanager
-    def _slot(self):
+    def _slot(self) -> Iterator[None]:
         self._semaphore.acquire()
         try:
             yield

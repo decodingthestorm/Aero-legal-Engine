@@ -29,6 +29,7 @@ component actually holds the key, until that's decided.
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 from legal_engine.core.models import SourceType, StatuteDocument
 from legal_engine.ingestion.crawler_manager import IngestionJob, run_ingestion_jobs
@@ -42,7 +43,7 @@ _vector_index = InMemoryVectorIndex()
 
 
 @app.task(name="legal_engine.crawl_and_parse")
-def crawl_and_parse(url: str, source_type: str, _fetcher: PoliteFetcher | None = None) -> list[dict]:
+def crawl_and_parse(url: str, source_type: str, _fetcher: PoliteFetcher | None = None) -> list[dict[str, Any]]:
     """``_fetcher`` is a test seam, not part of the task's production contract:
     real dispatch via .delay()/.apply_async() never passes it (JSON-serialized
     args can't carry a live PoliteFetcher anyway), so it defaults to a real
@@ -65,7 +66,7 @@ def crawl_and_parse(url: str, source_type: str, _fetcher: PoliteFetcher | None =
 
 
 @app.task(name="legal_engine.index_statute_embedding")
-def index_statute_embedding(statute_dict: dict) -> dict:
+def index_statute_embedding(statute_dict: dict[str, Any]) -> dict[str, Any]:
     statute = StatuteDocument.model_validate(statute_dict)
     vector = _embedder.embed(statute.text)
     _vector_index.upsert(statute.id, vector, {"citation": statute.citation, "title": statute.title})

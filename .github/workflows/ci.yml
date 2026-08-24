@@ -37,6 +37,14 @@ jobs:
       - name: Lint
         run: ruff check src tests
 
+      # Strict mode. Only src/ — the test suite leans on pytest fixtures
+      # and monkeypatching that strict mode would fight without catching
+      # anything real. python_version is deliberately unpinned in
+      # pyproject.toml, so this run targets the 3.11 set up above, which
+      # is the version requires-python actually promises.
+      - name: Type check
+        run: mypy src/legal_engine
+
       - name: Unit tests
         run: pytest tests/unit -v
 

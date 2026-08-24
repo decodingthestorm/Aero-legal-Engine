@@ -25,7 +25,7 @@ regardless of which claim the caller ultimately wants — duplicating
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any, cast
 
 from fastapi import Depends, HTTPException, Request, status
 
@@ -46,7 +46,7 @@ from legal_engine.persistence.repository import StatuteRepository
 from legal_engine.persistence.user_repository import UserRepository
 
 
-def _decode_bearer_token(request: Request) -> dict:
+def _decode_bearer_token(request: Request) -> dict[str, Any]:
     """Shared by get_current_tenant/require_auth below. Rejects (401): a
     missing/malformed header, a token that fails decode_token's own
     signature/expiry checks, a non-access token presented here (refresh/
@@ -102,7 +102,7 @@ async def get_current_tenant(request: Request) -> str:
 
 
 def get_tenant_registry(request: Request) -> TenantIndexRegistry:
-    return request.app.state.tenant_registry
+    return cast(TenantIndexRegistry, request.app.state.tenant_registry)
 
 
 def get_graph_service(
@@ -120,39 +120,39 @@ def get_vector_index(
 
 
 def get_embedder(request: Request) -> Embedder:
-    return request.app.state.embedder
+    return cast(Embedder, request.app.state.embedder)
 
 
 def get_solver_pool(request: Request) -> SolverPool:
-    return request.app.state.solver_pool
+    return cast(SolverPool, request.app.state.solver_pool)
 
 
 def get_fetcher(request: Request) -> PoliteFetcher:
-    return request.app.state.fetcher
+    return cast(PoliteFetcher, request.app.state.fetcher)
 
 
 def get_statute_repository(request: Request) -> StatuteRepository:
-    return request.app.state.statute_repository
+    return cast(StatuteRepository, request.app.state.statute_repository)
 
 
 def get_user_repository(request: Request) -> UserRepository:
-    return request.app.state.user_repository
+    return cast(UserRepository, request.app.state.user_repository)
 
 
 def get_wal(request: Request) -> WriteAheadLog:
-    return request.app.state.wal
+    return cast(WriteAheadLog, request.app.state.wal)
 
 
 def get_consent_ledger(request: Request) -> ConsentLedger:
-    return request.app.state.consent_ledger
+    return cast(ConsentLedger, request.app.state.consent_ledger)
 
 
 def get_token_ledger(request: Request) -> TokenLedger:
-    return request.app.state.token_ledger
+    return cast(TokenLedger, request.app.state.token_ledger)
 
 
 def get_email_sender(request: Request) -> EmailSender:
-    return request.app.state.email_sender
+    return cast(EmailSender, request.app.state.email_sender)
 
 
 async def require_auth(request: Request) -> str | None:

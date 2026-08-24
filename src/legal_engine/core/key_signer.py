@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import base64
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
@@ -141,7 +141,7 @@ class AwsKmsKeySigner:
     signature doesn't match."
     """
 
-    def __init__(self, key_id: str, client=None) -> None:
+    def __init__(self, key_id: str, client: Any = None) -> None:
         if client is None:
             try:
                 import boto3
@@ -162,7 +162,7 @@ class AwsKmsKeySigner:
             MessageType="RAW",
             SigningAlgorithm="ED25519_SHA_512",
         )
-        return response["Signature"]
+        return bytes(response["Signature"])
 
     def verify(self, data: bytes, signature: bytes) -> bool:
         try:
@@ -175,7 +175,7 @@ class AwsKmsKeySigner:
             )
         except self._client.exceptions.KMSInvalidSignatureException:
             return False
-        return response["SignatureValid"]
+        return bool(response["SignatureValid"])
 
 
 class VaultTransitKeySigner:
@@ -203,7 +203,7 @@ class VaultTransitKeySigner:
     def __init__(
         self,
         key_name: str,
-        client=None,
+        client: Any = None,
         vault_url: str | None = None,
         vault_token: str | None = None,
     ) -> None:
@@ -231,4 +231,4 @@ class VaultTransitKeySigner:
         response = self._client.secrets.transit.verify_signed_data(
             name=self._key_name, hash_input=encoded_input, signature=signature.decode("ascii")
         )
-        return response["data"]["valid"]
+        return bool(response["data"]["valid"])

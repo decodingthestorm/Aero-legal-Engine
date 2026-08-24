@@ -27,6 +27,7 @@ import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from legal_engine.core.exceptions import WALIntegrityError
 from legal_engine.core.key_signer import KeySigner
@@ -36,7 +37,11 @@ GENESIS_HASH = "0" * 96  # SHA-384 digests are 48 bytes = 96 hex chars
 
 
 def _compute_payload_hash(
-    sequence: int, prev_hash: str, event_type: str, payload: dict, timestamp: datetime
+    sequence: int,
+    prev_hash: str,
+    event_type: str,
+    payload: dict[str, Any],
+    timestamp: datetime,
 ) -> str:
     canonical = json.dumps(
         {
@@ -68,7 +73,7 @@ class WriteAheadLog:
         if path is not None and path.exists():
             self._load(path)
 
-    def append(self, event_type: str, payload: dict) -> WALEntry:
+    def append(self, event_type: str, payload: dict[str, Any]) -> WALEntry:
         sequence = len(self._entries)
         prev_hash = self._entries[-1].payload_hash if self._entries else GENESIS_HASH
         timestamp = datetime.now(UTC)

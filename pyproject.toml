@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "legal-engine"
-version = "1.9.0"
+version = "1.9.1"
 description = "Distributed legal ingestion, formal verification, and game-theoretic statutory optimization platform"
 requires-python = ">=3.11"
 readme = "README.md"
@@ -104,10 +104,63 @@ line-length = 100
 target-version = "py311"
 
 [tool.mypy]
-python_version = "3.11"
 strict = true
+# python_version is deliberately NOT pinned here, unlike ruff's
+# target-version above. Pinning it to 3.11 (what requires-python promises
+# and what CI runs) makes mypy unrunnable on any newer local interpreter:
+# numpy >= 2.5 requires Python >= 3.12 and its stubs use PEP 695 `type`
+# statements, which are a *syntax* error under a 3.11 target — and a stub
+# syntax error aborts the entire run ("errors prevented further checking")
+# before a single first-party file is looked at. It is not suppressible;
+# ignore_errors and follow_imports = skip were both tried.
+#
+# Unpinned, mypy targets whichever interpreter runs it, so both
+# environments work and each is self-consistent: CI installs a 3.11-era
+# numpy under 3.11 and type-checks against 3.11, which is the run that
+# gates merges; a 3.12+ local venv checks against its own version. The
+# gap that leaves — code valid on 3.14 but not 3.11 — is caught by CI,
+# and ruff's target-version = "py311" already catches the syntax half of
+# it locally. A gate nobody can run locally gets discovered only in CI,
+# which is how it stops being a gate.
 
 [[tool.mypy.overrides]]
-# Untyped/optional third-party dependencies with no published stubs.
-module = ["networkx.*", "z3.*", "neo4j.*", "qdrant_client.*", "sentence_transformers.*"]
+# Untyped/optional third-party dependencies with no published stubs. Every
+# one of these is behind a lazy import in a "real backend" class (see
+# core/key_signer.py, ingestion/ocr.py, knowledge_graph/*), so mypy can't
+# see them at all unless that extra happens to be installed — and the
+# default, tested path never installs them.
+module = [
+    "networkx.*",
+    "z3.*",
+    "neo4j.*",
+    "qdrant_client.*",
+    "sentence_transformers.*",
+    "boto3.*",
+    "botocore.*",
+    "hvac.*",
+    "pdf2image.*",
+    "pytesseract.*",
+    "celery.*",
+]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Neither of these is an ignore_missing_imports case — both are installed
+# and both ship (or partially ship) real type information; the problem is
+# that following it produces noise about the library rather than about
+# this codebase. numpy's stubs are version-sensitive (see the note on
+# python_version above) and cvxpy's are incomplete enough that ordinary
+# use reports "Module has no attribute" for functions that plainly exist.
+# Skipping types both as Any, a real but small loss: numpy and cvxpy are
+# used in game_theory/ and refactoring/ for array and convex-program math
+# whose shapes mypy was never verifying anyway.
+module = ["numpy.*", "cvxpy.*"]
+follow_imports = "skip"
+
+[[tool.mypy.overrides]]
+# celery's @app.task decorator is untyped, so under strict mode it makes
+# every task it decorates untyped too — an error about celery's typing,
+# not about tasks.py. The task bodies themselves are still fully checked;
+# only the "a decorator erased these annotations" complaint is silenced.
+module = ["legal_engine.workers.tasks"]
+disallow_untyped_decorators = false

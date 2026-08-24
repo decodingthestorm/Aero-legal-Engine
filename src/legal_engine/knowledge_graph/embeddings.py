@@ -19,7 +19,7 @@ from __future__ import annotations
 import hashlib
 import math
 import re
-from typing import Protocol
+from typing import Protocol, cast
 
 from legal_engine.core.config import settings
 
@@ -82,4 +82,7 @@ class SentenceTransformerEmbedder:
         self.dimension = self._model.get_sentence_embedding_dimension()
 
     def embed(self, text: str) -> list[float]:
-        return self._model.encode(text, normalize_embeddings=True).tolist()
+        # .tolist() is Any here: numpy's stubs are skipped in the mypy
+        # config (see pyproject.toml) because they need a newer target
+        # than requires-python promises.
+        return cast(list[float], self._model.encode(text, normalize_embeddings=True).tolist())

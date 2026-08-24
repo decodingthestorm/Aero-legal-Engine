@@ -67,6 +67,16 @@ honestly-flagged gap from the version before it — never a rewrite, always addi
   on (log(10) = 2.3026 nats), so it could never fire. The gate now rejects an unfireable threshold
   at construction. See "Semantic entropy abstention gate" below.
 
+- **v1.9.1** — `mypy --strict` now passes on all 72 source files and runs in CI. It had been
+  configured in `pyproject.toml` since the start and never once executed, so nothing it claimed to
+  enforce was actually enforced — the same shape of problem as v1.9.0's unfireable threshold, one
+  layer up. Turning it on surfaced 53 errors. Most were missing annotations, but three were real
+  defects: `sql_repository.py` reconstructed a `GeoBoundary` after checking only one of its four
+  bounds for NULL (a partial row would have failed pydantic validation pointing at the model rather
+  than the bad row); `federal.py` guarded `<TEXT>` as possibly-`None` on one line and called
+  `.strip()` on it unguarded three lines later; and `municipal.py` passed BeautifulSoup attribute
+  values straight to `float()` without accounting for multi-valued attributes returning a list.
+
 None of this means "battle-tested production system" — read on for what would still take.
 
 ## What's built
@@ -757,6 +767,24 @@ pytest
 is set (and needs the `postgres` extra installed) — it's what CI's `postgres` job runs against a
 real Postgres service container; there's nothing to configure for the rest of the suite, which
 tests the same repository against SQLite instead.
+
+Three gates run in CI and should be run locally before a commit:
+
+```bash
+ruff check .
+mypy src/legal_engine   # strict mode, src only
+pytest
+```
+
+`mypy` deliberately does **not** pin `python_version` in `pyproject.toml`, unlike ruff's
+`target-version = "py311"`. Pinning it to 3.11 makes mypy unrunnable on any newer local
+interpreter: numpy ≥ 2.5 requires Python ≥ 3.12 and its stubs use PEP 695 `type` statements, which
+are a *syntax* error under a 3.11 target — and a stub syntax error aborts the whole run before a
+single first-party file is checked (`ignore_errors` and `follow_imports = "skip"` were both tried;
+neither suppresses it). Unpinned, each environment targets its own interpreter and both work: CI
+installs a 3.11-era numpy under 3.11 and checks against 3.11, which is the run that gates merges.
+Strict mode is enforced on `src/` only — the test suite leans on pytest fixtures and monkeypatching
+that strict mode would fight without catching anything real.
 
 For the UI (requires Node.js 20+; needs the API running separately, see above):
 

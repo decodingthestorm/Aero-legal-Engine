@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from typing import Literal, cast
 from uuid import UUID
 
 from sqlalchemy import Text, select
@@ -78,7 +79,19 @@ class StatuteRecord(Base):
 
 def _to_domain(record: StatuteRecord) -> StatuteDocument:
     geo_boundary = None
-    if record.geo_lat_min is not None:
+    # All four bounds are written together by _from_domain (a GeoBoundary
+    # requires all of them), so in practice they're either all set or all
+    # NULL. Checking only lat_min relied on that invariant holding, which
+    # nothing in the schema enforces — a row with a partial boundary would
+    # have passed None into a float field and failed pydantic validation
+    # with an error pointing at the model rather than at the bad row.
+    # Checking all four states the invariant explicitly instead.
+    if (
+        record.geo_lat_min is not None
+        and record.geo_lat_max is not None
+        and record.geo_lon_min is not None
+        and record.geo_lon_max is not None
+    ):
         geo_boundary = GeoBoundary(
             lat_min=record.geo_lat_min,
             lat_max=record.geo_lat_max,
@@ -190,12 +203,22 @@ class UserRecord(Base):
 
 
 def _user_to_domain(record: UserRecord) -> UserAccount:
+    # role is a plain str column but UserAccount.role is a Literal, so the
+    # narrowing has to happen somewhere. It happens here rather than via a
+    # cast: UserAccount is a pydantic model, so an unexpected value would
+    # raise ValidationError anyway — this just makes the failure say which
+    # row and which value, instead of pointing at the model.
+    if record.role not in ("owner", "member"):
+        raise ValueError(
+            f"user {record.email!r} has role {record.role!r}, expected 'owner' or 'member'"
+        )
+    role = cast(Literal["owner", "member"], record.role)
     return UserAccount(
         id=record.id,
         tenant_id=record.tenant_id,
         email=record.email,
         password_hash=record.password_hash,
-        role=record.role,
+        role=role,
         email_verified=record.email_verified,
         created_at=record.created_at,
     )
