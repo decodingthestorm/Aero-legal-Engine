@@ -38,6 +38,16 @@ class TestSqlAlchemyUserRepository:
         assert fetched.tenant_id == user.tenant_id
         assert fetched.email == user.email
         assert fetched.password_hash == user.password_hash
+        assert fetched.role == "owner"
+        assert fetched.email_verified is False
+
+    async def test_member_role_and_email_verified_roundtrip(self, repo):
+        user = _user(role="member", email_verified=True)
+        await repo.add(user)
+
+        fetched = await repo.get_by_email(user.email)
+        assert fetched.role == "member"
+        assert fetched.email_verified is True
 
     async def test_get_missing_returns_none(self, repo):
         assert await repo.get_by_email("nobody@example.com") is None

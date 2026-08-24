@@ -11,11 +11,13 @@ that guarantee is about tenant *data* (statutes, graph edges, vector
 entries) being invisible across tenants, not about whether a login
 system can find the one account an email maps to.
 
-Every tenant has exactly one user in this version — POST /auth/register
-always provisions a brand-new tenant alongside its first user (see
-api/routes/auth.py's own docstring for why inviting a second user into an
-*existing* tenant is out of scope here) — so there's no separate "list
-users in a tenant" method to build yet.
+POST /auth/register always provisions a brand-new tenant alongside its
+first user (that user becomes the tenant's "owner" — UserAccount.role);
+POST /auth/invite + POST /accept-invite (owner-only, api/routes/auth.py)
+add further "member" users to an *existing* tenant. Still no "list users
+in a tenant" method here — nothing has needed one yet (an owner inviting
+someone doesn't need to enumerate existing members first) — add one if
+that changes rather than guessing at its shape now.
 
 ``InMemoryUserRepository`` lives here (no SQLAlchemy import, always
 available) rather than alongside ``SqlAlchemyUserRepository`` in

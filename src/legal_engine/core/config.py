@@ -111,6 +111,11 @@ class Settings(BaseSettings):
     # it should have a short exposure window), the refresh token is only
     # ever sent to one single-purpose endpoint.
     refresh_token_expires_days: int = 30
+    # POST /auth/invite (owner-only) issues one of these; POST
+    # /accept-invite redeems it (single-use — see
+    # compliance/token_ledger.py's revoke reuse). A week is generous
+    # enough that a real emailed invite doesn't expire before it's read.
+    invite_token_expires_days: int = 7
 
     # Tenant every request is scoped to when settings.api_auth_enabled is
     # False (the default) — the whole deployment behaves as one tenant,

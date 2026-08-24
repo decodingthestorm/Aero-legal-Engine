@@ -182,6 +182,10 @@ class UserRecord(Base):
     id: Mapped[UUID] = mapped_column(index=True)
     tenant_id: Mapped[str] = mapped_column(nullable=False, index=True)
     password_hash: Mapped[str] = mapped_column(nullable=False)
+    # "owner"/"member" — see UserAccount's own docstring (core/models.py)
+    # for what this does and doesn't gate.
+    role: Mapped[str] = mapped_column(nullable=False, default="owner")
+    email_verified: Mapped[bool] = mapped_column(nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(nullable=False)
 
 
@@ -191,6 +195,8 @@ def _user_to_domain(record: UserRecord) -> UserAccount:
         tenant_id=record.tenant_id,
         email=record.email,
         password_hash=record.password_hash,
+        role=record.role,
+        email_verified=record.email_verified,
         created_at=record.created_at,
     )
 
@@ -201,6 +207,8 @@ def _user_from_domain(user: UserAccount) -> UserRecord:
         tenant_id=user.tenant_id,
         email=user.email,
         password_hash=user.password_hash,
+        role=user.role,
+        email_verified=user.email_verified,
         created_at=user.created_at,
     )
 

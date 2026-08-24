@@ -55,3 +55,21 @@ class TestInMemoryUserRepository:
         repo = InMemoryUserRepository()
         await repo.create_schema()
         await repo.close()
+
+    async def test_role_defaults_to_owner(self):
+        repo = InMemoryUserRepository()
+        user = _user()
+        await repo.add(user)
+        assert (await repo.get_by_email(user.email)).role == "owner"
+
+    async def test_member_role_roundtrips(self):
+        repo = InMemoryUserRepository()
+        user = _user(role="member")
+        await repo.add(user)
+        assert (await repo.get_by_email(user.email)).role == "member"
+
+    async def test_email_verified_defaults_to_false_and_roundtrips_true(self):
+        repo = InMemoryUserRepository()
+        user = _user(email_verified=True)
+        await repo.add(user)
+        assert (await repo.get_by_email(user.email)).email_verified is True

@@ -38,6 +38,10 @@ honestly-flagged gap from the version before it — never a rewrite, always addi
   token issued in one login and carried through every rotation), not just the one reused token —
   closing the gap where a victim's already-rotated access token would otherwise stay valid even
   after their refresh token was clearly stolen and reused.
+- **v1.5.0** — `UserAccount.role` (`"owner"`/`"member"`) plus `POST /auth/invite` +
+  `POST /accept-invite`, closing "no inviting a second user into an existing tenant" and "no
+  roles/permissions" together: the natural minimal role model here is exactly what an invite system
+  needs to gate on (only an owner can invite).
 
 None of this means "battle-tested production system" — read on for what would still take.
 
@@ -130,8 +134,9 @@ None of this means "battle-tested production system" — read on for what would 
   `kind`, and returns both the `ProofResult` and the rendered SMT-LIB2 text), `/simulation/penalty`
   and `/simulation/trembling-hand`, `/refactoring/detect-loopholes` + `/refactoring/sparse-patch`, `/graph/statutes` +
   `/graph/preemption/{entity_id}` + `/graph/search`, `/ingestion/jobs`, `/auth/token` +
-  `/auth/register` + `/auth/refresh` + `/auth/revoke` (see "User accounts, tokens & revocation"
-  below), and `/legal/disclaimer` + `/legal/accept` (see "Liability disclaimer & consent" below).
+  `/auth/register` + `/auth/invite` + `/auth/accept-invite` + `/auth/refresh` + `/auth/revoke` (see
+  "User accounts, tokens & revocation" below), and `/legal/disclaimer` + `/legal/accept` (see
+  "Liability disclaimer & consent" below).
   Every route depends on the knowledge_graph Protocol interfaces rather than concrete classes;
   which concrete class each resolves to is decided by `knowledge_graph/factory.py`, itself driven
   by `core.config.settings` (`graph_backend`/`vector_backend`/`embedding_backend`) — swapping in
@@ -280,8 +285,35 @@ actual cascade: refresh once, reuse the *old* refresh token (simulating theft), 
 too; a normal 3-step refresh chain that never reuses anything is confirmed to never falsely trigger
 this; none of it leaks across two different users' sessions.
 
-**What this still isn't**: there's still no inviting a second user into an existing tenant, no
-roles/permissions, no password reset or email verification flow.
+**Roles & tenant invites**, added in v1.5.0, closing "no inviting a second user into an existing
+tenant" and "no roles/permissions" together — the natural minimal role model here (`UserAccount.
+role`, `"owner"`/`"member"`) is exactly what an invite system needs to gate on, so building them
+separately would have meant inventing a role system with nothing real to check it against, or an
+invite system with no notion of who's allowed to send one.
+
+- `POST /auth/register`'s user is always `"owner"` — they *are* the one who created the tenant.
+- **`POST /auth/invite`** (owner-only, 403 otherwise) — `{email}`. 409s if the email is already
+  registered. Issues an invite token (`token_type="invite"`, `settings.
+  invite_token_expires_days` — a week by default) scoped to the *inviter's own tenant* — this is
+  what actually lets someone join an *existing* tenant, unlike `POST /auth/register`, which always
+  creates a brand-new one. Would be emailed to the invitee in a real deployment; returned directly
+  in the response for now, same as every other token this system issues, so the flow is directly
+  testable without a real inbox.
+- **`POST /auth/accept-invite`** — `{invite_token, password}`. Creates the `UserAccount` (role
+  `"member"`, same `tenant_id` the invite was scoped to) and revokes the invite token's `jti` via
+  the *same* `TokenLedger.revoke` `POST /revoke` already uses — no second single-use mechanism
+  built, since an already-accepted invite is functionally identical to a revoked one. Issues a
+  normal access+refresh pair so the new member is logged in immediately.
+
+`tests/integration/test_invite_flow.py` proves this end-to-end: an invitee lands in the *same*
+tenant as the owner (not a new one) and can see/act on that tenant's data through the existing
+isolation machinery; a member's own invite attempt is rejected (403); inviting an already-registered
+email is rejected (409); accepting the same invite token twice is rejected (401, reusing
+`TokenLedger`'s existing single-use guarantee); an access token presented at `/accept-invite` is
+rejected the same way a refresh token is rejected elsewhere (`token_type` checked).
+
+**What this still isn't**: there's no way to change a role or remove a member after the fact, no
+listing who's in a tenant, and no password reset or email verification flow.
 
 ### Liability disclaimer & consent
 
@@ -472,15 +504,18 @@ Read this before treating any of the above as more finished than it is:
   executed yet as of this commit (it will on the next push). Treat "the UI has real, cross-browser-
   configured behavioral test coverage, and it already found and fixed one bug" as established;
   treat "this has run in CI, repeatedly, over time" as not yet true.
-- **Registration, revocation, refresh rotation, and reuse-detection are all real now; account
-  management still isn't.** As of v1.2.0, `StatuteRepository`/`GraphService`/`VectorIndex` are
-  genuinely tenant-scoped end to end; as of v1.3.0, `POST /auth/register` provisions genuine,
-  independent tenant/credential pairs; as of v1.4.0, a leaked or stolen access token can actually be
-  revoked (not just wait out its `settings.jwt_expires_minutes` expiry), and refresh tokens are
-  genuinely redeemable, single-use, rotating; as of v1.4.1, reusing a spent refresh token revokes the
-  whole session, not just that one token (see "User accounts, tokens & revocation" above for all
-  four) — none of that aspirational. What's still missing: no inviting a second user into an existing
-  tenant, no roles/permissions, no password reset or email verification flow.
+- **Registration, revocation, refresh rotation, reuse-detection, roles, and invites are all real
+  now; account management still isn't.** As of v1.2.0,
+  `StatuteRepository`/`GraphService`/`VectorIndex` are genuinely tenant-scoped end to end; as of
+  v1.3.0, `POST /auth/register` provisions genuine, independent tenant/credential pairs; as of
+  v1.4.0, a leaked or stolen access token can actually be revoked (not just wait out its
+  `settings.jwt_expires_minutes` expiry), and refresh tokens are genuinely redeemable, single-use,
+  rotating; as of v1.4.1, reusing a spent refresh token revokes the whole session, not just that one
+  token; as of v1.5.0, an owner can invite a real second user into their *existing* tenant, with a
+  real (if minimal) role distinction gating who's allowed to (see "User accounts, tokens &
+  revocation" above for all five) — none of that aspirational. What's still missing: no way to
+  change a role or remove a member after the fact, no listing who's in a tenant, no password reset
+  or email verification flow.
 - **The liability-disclaimer consent record is real (tamper-evident, tied to a server-verified
   token subject, tenant-scoped, and — since `ConsentLedger` — an O(1) indexed lookup rather than a
   WAL scan) but its supporting infrastructure is still minimal.** The WAL's signing key is a

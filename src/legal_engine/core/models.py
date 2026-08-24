@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import Enum
+from typing import Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -126,10 +127,23 @@ class UserAccount(BaseModel):
     """A registered user, scoped to exactly one tenant (see
     persistence/user_repository.py). ``password_hash`` is never the
     plaintext password — see api/security.py's hash_password/
-    verify_password (PBKDF2-HMAC-SHA256, not reversible)."""
+    verify_password (PBKDF2-HMAC-SHA256, not reversible).
+
+    ``role``: the tenant's original registerer (POST /auth/register) is
+    always "owner" — they *are* the one who created it. Someone invited
+    in later (POST /auth/invite -> POST /auth/accept-invite) is always
+    "member". There's no way to change a role or remove a member after
+    the fact yet — the only permission this gates today is who can send
+    further invites (owner-only, api/routes/auth.py's invite endpoint).
+
+    ``email_verified``: tracked (POST /auth/verify-email flips it) but
+    not enforced anywhere yet — no route currently checks it, so treat it
+    as real, queryable state rather than a functioning access gate."""
 
     id: UUID = Field(default_factory=uuid4)
     tenant_id: str
     email: str
     password_hash: str
+    role: Literal["owner", "member"] = "owner"
+    email_verified: bool = False
     created_at: datetime = Field(default_factory=_utcnow)
