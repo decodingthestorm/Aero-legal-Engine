@@ -1,4 +1,4 @@
-"""Correlation ID propagation and domain-exception -> HTTP error mapping.
+"""CORS, correlation ID propagation, and domain-exception -> HTTP error mapping.
 
 Every LegalEngineError subclass (NotEPRFragmentError, ParseError,
 UnbalancedCycleError, RobotsDisallowedError, WALIntegrityError, ...) maps to
@@ -14,8 +14,10 @@ from __future__ import annotations
 import uuid
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from legal_engine.core.config import settings
 from legal_engine.core.exceptions import LegalEngineError
 from legal_engine.core.logging import get_logger
 
@@ -23,6 +25,20 @@ logger = get_logger(__name__)
 
 
 def add_middleware(app: FastAPI) -> None:
+    # ui/ (Next.js dev server, localhost:3000) is a different origin than
+    # the API (localhost:8000) — without this, TestClient-based tests
+    # would still pass (it bypasses browser CORS enforcement entirely) but
+    # every real browser request from the dashboard would be silently
+    # blocked. allow_headers includes Authorization for the optional JWT
+    # auth layer's Bearer token.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_allowed_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
     @app.middleware("http")
     async def correlation_id_middleware(request: Request, call_next):
         correlation_id = request.headers.get("X-Correlation-ID", str(uuid.uuid4()))

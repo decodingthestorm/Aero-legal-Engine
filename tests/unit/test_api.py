@@ -20,6 +20,33 @@ class TestHealth:
         assert response.json() == {"status": "ok"}
 
 
+class TestCors:
+    """TestClient doesn't enforce CORS the way a browser does (there's no
+    same-origin policy being applied), but the server-side behavior of
+    CORSMiddleware — which headers it adds in response to a given Origin —
+    is real and testable here, and is exactly what a browser relies on."""
+
+    def test_allowed_origin_gets_cors_header(self, client):
+        response = client.get("/health", headers={"Origin": "http://localhost:3000"})
+        assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
+
+    def test_disallowed_origin_gets_no_cors_header(self, client):
+        response = client.get("/health", headers={"Origin": "http://evil.example.com"})
+        assert "access-control-allow-origin" not in response.headers
+
+    def test_preflight_allows_authorization_header_for_protected_routes(self, client):
+        response = client.options(
+            "/simulation/penalty",
+            headers={
+                "Origin": "http://localhost:3000",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "authorization,content-type",
+            },
+        )
+        assert response.status_code == 200
+        assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
+
+
 class TestVerificationRoute:
     def test_verify_satisfiable_formula(self, client):
         body = {

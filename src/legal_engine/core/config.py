@@ -56,6 +56,11 @@ class Settings(BaseSettings):
     # API
     api_host: str = "0.0.0.0"
     api_port: int = 8000
+    # ui/ (Next.js dev server) runs on a different origin (localhost:3000)
+    # than the API (localhost:8000) — without these, every browser fetch
+    # from the dashboard would be silently blocked by CORS, not caught by
+    # any test that doesn't use a real browser (TestClient bypasses it).
+    cors_allowed_origins: list[str] = ["http://localhost:3000"]
     api_auth_enabled: bool = False
     api_client_id: str = "demo"
     api_client_secret: str = "change-me-in-production"
