@@ -96,9 +96,19 @@ system" — see [Known limitations](#known-limitations) for what that would stil
   before (`error-handling.spec.ts` — API unreachable, a request 500s, a request 400s — using route
   interception to simulate real failures without needing to control the live server's lifecycle
   mid-test). `playwright.config.ts` starts both the UI and the API itself (or reuses them if
-  already running locally), so `npm run test:e2e` is one command. Written the same way as `ui/`
-  itself — no Node.js available to run it while writing it — so it's unverified in the same sense;
-  see Known limitations.
+  already running locally), so `npm run test:e2e` is one command.
+
+  Written without Node.js available to run it, same as the rest of `ui/` — and the first real run
+  (by a human, not me) immediately caught a genuine bug: `/simulation/penalty-curve` returned a
+  dict keyed by `str(x)` for each sample point, and Python's `str(50.0)` ("50.0") doesn't match
+  JavaScript's `String(50)` ("50") for a whole-number value. Every lookup on the frontend silently
+  missed, so the penalty curve chart just never rendered — no error, nothing in the console, a
+  Python-only unit test couldn't see it because it asserted against Python's own stringification
+  and never crossed the language boundary. 15/16 passed on that first run; fixed by changing the
+  response to a list of `{x, y}` points instead of a stringified-float-keyed dict (removes the bug
+  class, not just this instance); a second independent run then passed 16/16. That's the concrete
+  case, not just the abstract argument, for why `ui/`'s one earlier manual pass was never a
+  substitute for this suite.
 
 Everything under `src/legal_engine/` (i.e. everything except `ui/`) has a passing unit and
 integration test suite under `tests/`, including an end-to-end test
@@ -156,14 +166,12 @@ that does and doesn't prove.
 
 Read this before treating any of the above as more finished than it is:
 
-- **The UI has been manually verified once by a human; the Playwright suite that's meant to
-  replace that has not been run by anyone yet.** `ui/e2e/` was written the same way the rest of the
-  UI was — without Node.js available to run it — so while it's written carefully against real,
-  known-working selectors (`data-testid` attributes added to the components specifically for this)
-  and the actual API contracts, it has never actually executed. CI's new `e2e` job runs it for real
-  on every push going forward, but as of this writing that hasn't happened yet either. Until one of
-  those runs (CI's or a local `npm run test:e2e`) actually completes, "there's an automated browser
-  test suite" is a claim about what was written, not about what's been proven to pass.
+- **The Playwright suite has now run for real (twice) and passes 16/16** — see `ui/e2e/`'s entry
+  above for what its first run actually caught. What that does and doesn't establish: it's Chromium
+  only (no Firefox/WebKit/mobile viewport coverage), it's been run twice on one machine by one
+  person, and CI's `e2e` job hasn't executed yet as of this commit (it will on the next push).
+  Treat "the UI has real behavioral test coverage, and it already found and fixed one bug" as
+  established; treat "this has run in CI, across browsers, over time" as not yet true.
 - **The graph/vector indexes still don't persist, even with `statute_backend = "sql"`.**
   `persistence/` gives you a durable record of every statute ingested — but `graph_backend` and
   `vector_backend` are separate settings that still default to in-memory, and switching them to
