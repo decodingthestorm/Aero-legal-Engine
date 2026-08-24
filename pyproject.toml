@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "legal-engine"
-version = "1.9.2"
+version = "1.10.0"
 description = "Distributed legal ingestion, formal verification, and game-theoretic statutory optimization platform"
 requires-python = ">=3.11"
 readme = "README.md"
@@ -62,6 +62,13 @@ sparse-opt = ["cvxpy>=1.4.0"]
 # real AWS account or Vault instance in this environment — see that
 # module's docstring for what is and isn't verified here.
 kms = ["boto3>=1.34.0", "hvac>=2.1.0"]
+# core/timestamper.py's RFC 3161 Time-Stamp Protocol client
+# (settings.timestamp_backend). Pure Python with no native extensions,
+# unlike the sentence-transformers/cvxpy families — so unlike those, it's
+# also in `dev`, and the request-encoding/response-parsing tests run
+# against synthetic DER in the normal suite. What's *not* verified here
+# is a live TSA, same honesty category as the KMS/Vault signers.
+tsp = ["pyasn1>=0.6.0", "pyasn1-modules>=0.4.0"]
 # Deployment-role splits, not lazy-import backends: a batch/library-only
 # user of formal_logic/game_theory shouldn't need a web framework or task
 # queue pulled in. CI installs both to cover api/ and workers/ in tests.
@@ -73,7 +80,7 @@ workers = ["celery>=5.3.6", "redis>=5.0.1"]
 load-test = ["locust>=2.20.0"]
 
 all = [
-    "legal-engine[semantic,vector-qdrant,graph-neo4j,js-rendering,ocr,postgres,sparse-opt,kms,api,workers,load-test]",
+    "legal-engine[semantic,vector-qdrant,graph-neo4j,js-rendering,ocr,postgres,sparse-opt,kms,tsp,api,workers,load-test]",
 ]
 
 dev = [
@@ -89,6 +96,11 @@ dev = [
     # here rather than only in the `postgres` extra.
     "sqlalchemy>=2.0.0",
     "aiosqlite>=0.20.0",
+    # See the `tsp` extra: pure Python, so the RFC 3161 client's encoding
+    # and parsing are covered by the normal test suite rather than being
+    # skipped like the KMS/Vault paths.
+    "pyasn1>=0.6.0",
+    "pyasn1-modules>=0.4.0",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -141,6 +153,8 @@ module = [
     "pdf2image.*",
     "pytesseract.*",
     "celery.*",
+    "pyasn1.*",
+    "pyasn1_modules.*",
 ]
 ignore_missing_imports = true
 

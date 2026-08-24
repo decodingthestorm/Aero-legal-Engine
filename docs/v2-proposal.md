@@ -9,8 +9,8 @@ semantic-entropy hallucination gate, ZKP circuit compilation via CirC/cvc5,
 schema-per-tenant Postgres with RFC 3161 timestamping, and a Stackelberg differential
 game simulator.
 
-One node was adopted and shipped (semantic entropy, v1.9.0). Three are buildable here
-and remain open. Two cannot be built or verified in this environment. Six defects were
+Two nodes have been adopted and shipped (semantic entropy, v1.9.0; RFC 3161 timestamping,
+v1.10.0). Two more are buildable here and remain open. Two cannot be built or verified in this environment. Six defects were
 found that are wrong independent of tooling — two of them provably so, and one is a
 cross-tenant data leak in the isolation model the spec chose *for* isolation.
 
@@ -27,7 +27,8 @@ Checked directly at review time, not assumed.
 | Required by the spec | Status |
 |---|---|
 | Isabelle/HOL, cvc5, circom, ZoKrates, psql, pgbouncer | absent |
-| vllm, xgrammar, torch, pyasn1, transformers, asyncpg/psycopg | absent |
+| vllm, xgrammar, torch, transformers, asyncpg/psycopg | absent |
+| pyasn1 / pyasn1-modules | absent at review time; **added in v1.10.0** as the `tsp` extra, since it's pure Python with no native extensions |
 | GPU | RTX 5070 Ti Laptop, 12 GB — but vLLM is Linux/WSL2 only, and torch's DLLs are blocked here by Windows Application Control |
 | z3, numpy, scipy, cryptography, sqlalchemy | present |
 
@@ -139,7 +140,7 @@ forbidden without addressing any of that is not an upgrade.
 | Node | Disposition |
 |---|---|
 | `NODE_03` Semantic entropy gate | **Shipped v1.9.0**, with defect 1 corrected |
-| `NODE_05` RFC 3161 timestamping | **Open, buildable.** `pyasn1` is pure Python; request construction, response/CMS parsing, and nonce anti-replay are unit-testable against a mocked TSA. Genuinely valuable: WAL timestamps are currently self-asserted. |
+| `NODE_05` RFC 3161 timestamping | **Shipped v1.10.0.** `core/timestamper.py`. Anchors the WAL's head hash rather than stamping each entry — the chain already commits backwards, so one token attests the whole log. Verifies status, nonce, imprint, and hash algorithm; deliberately does *not* verify the TSA signature, since `cryptography` exposes no CMS verification API and hand-rolling it would be worse than deferring to `openssl ts -verify`. |
 | `NODE_01` Deontic reasoning | **Open, buildable in reduced form.** Isabelle isn't available, but `Opt(φ)` and `O(ψ|φ)` over a *finite* world set with an explicit betterness relation is decidable and directly implementable, checkable against Chisholm's Paradox and gentle murder. Would also fix defect 4. Must be labelled finite-model evaluation, not HOL theorem proving. |
 | `NODE_06` Stackelberg simulator | **Open, buildable in reduced form.** Drop the jump term and the potential-game reduction; a 1-D finite-difference HJB validated against the closed-form LQ Riccati solution is real work with numpy/scipy. Resolves defect 5 by construction. |
 | `NODE_02` vLLM / XGrammar extraction | **Not buildable.** vLLM has no native Windows support; torch's DLLs are blocked here; 12 GB VRAM won't serve batch `N=256` for a legal-grade model. |

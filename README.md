@@ -85,6 +85,13 @@ honestly-flagged gap from the version before it — never a rewrite, always addi
   no native timestamp type and Postgres' `TIMESTAMP WITHOUT TIME ZONE` discards the offset. Nothing
   asserted on either field, so nothing noticed. Fixed at the domain boundary (`_as_utc`).
 
+- **v1.10.0** — `core/timestamper.py`: RFC 3161 trusted timestamping, closing the gap that every
+  timestamp here was **self-asserted**. The WAL signs its own clock, which proves the chain is
+  intact but nothing about *when* to anyone who doesn't already trust the host. `anchor()`
+  timestamps the head hash, attesting the whole log in one token. Second of the v2.0 proposal's
+  nodes to ship, and the only one of its infrastructure items that closed a real gap rather than
+  restating a solved one.
+
 None of this means "battle-tested production system" — read on for what would still take.
 
 ## What's built
@@ -164,6 +171,16 @@ None of this means "battle-tested production system" — read on for what would 
   key — AWS KMS does support Ed25519 natively (confirmed by introspecting botocore's own KMS
   service model, correcting an initial assumption that it was RSA/NIST-ECC only), so this matches
   `Ed25519FileKeySigner`'s algorithm rather than switching families.
+- **`core/timestamper.py`** — `Timestamper`: RFC 3161 trusted timestamping, closing the gap that
+  every timestamp in this system is otherwise **self-asserted**. The WAL stamps its own clock and
+  signs it, which makes the log tamper-*evident* but proves nothing about *when* to anyone who
+  doesn't already trust the host — someone who controls the machine can backdate it and produce a
+  perfectly valid chain. A Time-Stamp Authority signs "I saw this digest at this time," which is a
+  different claim from "this host wrote this." `anchor()` timestamps the WAL's *head hash* rather
+  than each entry: entry N's hash transitively commits to every entry before it, so one token
+  attests the whole log, and per-entry stamping would put a network round trip on every write and
+  make the WAL unavailable whenever the TSA is. See "Trusted timestamping" below for what it
+  verifies and what it deliberately doesn't.
 - **`compliance/consent.py`** — per-tenant liability-disclaimer acceptance, recorded as WAL entries
   rather than a separate consent table. See "Liability disclaimer & consent" below.
 - **`uncertainty/`** — semantic entropy over bidirectional-entailment clusters, as an abstention
@@ -565,6 +582,60 @@ one of those "optional" dependencies turned out to already be installed in a bro
 git history on `knowledge_graph/embeddings.py` for what that surfaced). `api` and `workers` are
 deployment-role extras (a library-only user shouldn't need FastAPI or Celery pulled in) rather
 than lazy-backend extras; CI installs both to cover their tests.
+
+### Trusted timestamping
+
+Added in v1.10.0 (`core/timestamper.py`), the one infrastructure item from the v2.0 proposal that
+closed a gap this codebase genuinely had rather than restating something already solved.
+
+**The gap.** `WriteAheadLog.append` stamps `datetime.now(UTC)` from the host's own clock, signs it,
+and chains it. That is tamper-*evidence*: you can't alter an entry without breaking the chain. It
+is not *time* evidence. Someone who controls the machine can set the clock back and produce a chain
+that verifies perfectly. Every timestamp in the system was self-asserted.
+
+- **`LocalTimestamper`** is the default and is deliberately **not** trusted timestamping — it reads
+  the local clock and returns `source="local"`. That field is on the token rather than in a
+  docstring on purpose: a caller cannot accidentally treat a local stamp as third-party
+  attestation, and the distinction survives being persisted or displayed. It exists so the
+  anchoring path is exercisable offline, the role `LoggingEmailSender` plays for email.
+- **`Rfc3161Timestamper`** is real TSP dispatch behind the `tsp` extra (pyasn1 — pure Python, no
+  native extensions, so unlike the sentence-transformers and cvxpy families it's also in `dev` and
+  its encoding/parsing run in the normal suite).
+- **`anchor(wal, timestamper)`** timestamps the head hash. One token attests the entire log,
+  because the chain already commits backwards. It's a free function rather than a `WriteAheadLog`
+  method: the WAL holds together with no notion of trusted time, and anchoring is something done
+  *to* a WAL by whoever has a TSA configured.
+
+**What it verifies**: response status, that the returned nonce equals the one sent (anti-replay —
+without it a recorded response could be replayed against any later request), that the returned
+message imprint equals the digest submitted (the TSA stamped *our* data, not something else), and
+that the hash algorithm matches. Every mismatch raises; it fails closed.
+
+**What it does not verify — and won't**: the TSA's signature over the token, or its certificate
+chain. This isn't a to-do. `cryptography` 50.x exposes no CMS/PKCS#7 *verification* API at all
+(checked by introspection, not assumed — only decrypt and certificate loading), and hand-rolling
+CMS signature validation is exactly the category of security code that shouldn't be hand-rolled.
+So the full DER token is retained on the returned `TimestampToken` and verification is an explicit
+separate step against a real trust store:
+
+```bash
+openssl ts -verify -in token.tsr -data anchored.bin -CAfile tsa-ca.pem
+```
+
+Read a `source="tsa"` token as *"a TSA granted this and the nonce and imprint round-tripped,"* not
+as *"cryptographically verified."*
+
+`tests/unit/test_timestamper.py` exercises this against genuine DER rather than a mock standing in
+for it — unlike the KMS/Vault signers, where the wire format belongs to AWS and Vault, TSP's
+structures *are* the standard, so the tests assemble a real `TimeStampResp` (CMS `SignedData`
+wrapping a context-tagged `TSTInfo`) and the client parses actual bytes. Every rejection path has a
+test: rejected status, replayed nonce, substituted digest, wrong hash algorithm, missing token,
+wrong content type, and garbage.
+
+**What this still isn't**: never exercised against a live TSA — same honesty category as the
+KMS/Vault signers. `anchor()` is a library call with no scheduler behind it; nothing anchors
+periodically on its own, and choosing an anchoring cadence is a real operational decision this
+doesn't make for you.
 
 ### Semantic entropy abstention gate
 

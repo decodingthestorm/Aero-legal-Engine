@@ -97,6 +97,21 @@ class Settings(BaseSettings):
     smtp_from_address: str = "noreply@legal-engine.local"
     smtp_use_tls: bool = True
 
+    # core/timestamper_factory.py: RFC 3161 trusted timestamping. Every
+    # timestamp in this system is otherwise self-asserted — the WAL
+    # stamps its own clock — so this is what lets a third party check
+    # *when* something was logged rather than only that the chain is
+    # intact. "local" (the default, always available) is deliberately NOT
+    # trusted timestamping and says so in what it returns
+    # (TimestampToken.source == "local"); "rfc3161" needs the `tsp` extra
+    # and a real TSA at tsa_url, and has not been exercised against a
+    # live one here. See core/timestamper.py for what it does and does
+    # not verify.
+    timestamp_backend: Literal["local", "rfc3161"] = "local"
+    tsa_url: str = ""
+    timestamp_hash_algorithm: Literal["sha256", "sha384", "sha512"] = "sha384"
+    tsa_timeout_seconds: float = 10.0
+
     # uncertainty/factory.py: semantic-entropy abstention gate over
     # stochastic (LLM) output. "lexical" (the default, always available)
     # is deterministic token-containment scoring — a conservative floor
