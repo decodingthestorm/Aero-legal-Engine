@@ -74,11 +74,12 @@ system" — see [Known limitations](#known-limitations) for what that would stil
   clause, see the `ProofResult` and its SMT-LIB2 rendering), `SimulationCard` (deterrence-penalty
   calculator plus an SVG-rendered convex penalty curve), and `GraphViewer` (add a statute, resolve
   preemption for an entity, semantic search) — all talking to the real API via a typed client
-  (`src/lib/api.ts`). **This code was written without Node.js available in the environment it was
-  built in, so it has never been locally installed, type-checked, built, or run in a browser** —
-  see Known limitations before relying on it. The `ui` job in `.github/workflows/ci.yml` runs
-  `npm install && npm run build` (which type-checks) on every push, so that's the first real
-  verification this code gets.
+  (`src/lib/api.ts`). Written without Node.js available in the build environment, so `npm install`,
+  `next dev`, and a real browser session were all someone else's first run of it, not mine — and
+  that run did surface one real bug (missing CORS support, since fixed) that no Python-side test
+  could have caught. All three components have since been manually verified end-to-end in a
+  browser against a live API: compiles clean, every panel renders, every request round-trips
+  correctly. See Known limitations for what "manually verified once" doesn't cover.
 
 Everything under `src/legal_engine/` (i.e. everything except `ui/`) has a passing unit and
 integration test suite under `tests/`, including an end-to-end test
@@ -99,11 +100,14 @@ than lazy-backend extras; CI installs both to cover their tests.
 
 Read this before treating any of the above as more finished than it is:
 
-- **The UI is unverified.** No Node.js in the build environment means no local `npm install`,
-  `tsc`, `next build`, or browser test ever ran against it. It's written carefully against the
-  real, tested API contracts, but "compiles" and "renders correctly" are different claims — only
-  CI's `ui` job (or a human running `make ui-install && make ui-dev`) has actually checked the
-  former, and nothing has checked the latter yet.
+- **The UI has been manually verified once, not automatically.** It compiles cleanly and all
+  three components (ProofInspector, SimulationCard, GraphViewer) have been exercised end-to-end
+  in a real browser against a live API — but that was one manual pass through the happy paths,
+  not a repeatable test suite. There's no Playwright/Cypress (or similar) browser test, no error-
+  path coverage (what does the UI show if the API is down mid-request, or a request 400s?), and no
+  regression protection against a future change breaking something that manual pass happened to
+  check. CI's `ui` job (`npm install && npm run build`) still only proves it compiles, not that it
+  behaves correctly — that's what the manual pass added, once, for the paths above.
 - **No Postgres-backed persistence.** `core/config.py` has a `postgres_dsn` setting and
   `docker-compose.yml` runs a Postgres container, but nothing reads or writes to it — all state
   (the knowledge graph, the vector index) lives in the API process's memory and is lost on
@@ -128,8 +132,7 @@ pip install -e ".[dev,api,workers]"   # api/workers extras needed for the full t
 pytest
 ```
 
-For the UI (requires Node.js 20+, which — see Known limitations — has never actually been run
-against this code):
+For the UI (requires Node.js 20+; needs the API running separately, see above):
 
 ```bash
 make ui-install
