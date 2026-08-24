@@ -13,8 +13,9 @@ import httpx
 import pytest
 
 from legal_engine.core.exceptions import WALIntegrityError
+from legal_engine.core.key_signer import generate_signing_key
 from legal_engine.core.models import SourceType
-from legal_engine.core.wal import WriteAheadLog, generate_signing_key
+from legal_engine.core.wal import WriteAheadLog
 from legal_engine.formal_logic.ast_nodes import And, Atom, Constant, Implies, Not, Variable
 from legal_engine.formal_logic.epr_compiler import compile_epr_formula
 from legal_engine.formal_logic.solver_pool import SolverPool

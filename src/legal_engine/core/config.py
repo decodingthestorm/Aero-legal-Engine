@@ -58,8 +58,21 @@ class Settings(BaseSettings):
     ingestion_min_delay_seconds: float = 1.0
     ingestion_respect_robots_txt: bool = True
 
-    # WAL
+    # WAL / core/key_signer_factory.py: which backend signs and verifies
+    # WAL entries. "file" (the default, always available) is a local
+    # Ed25519 keypair persisted unencrypted under wal_path — see
+    # Ed25519FileKeySigner's docstring for why that's an honest, not a
+    # hidden, limitation. "aws_kms"/"vault_transit" need the `kms` install
+    # extra (boto3/hvac) and a real key/instance already provisioned —
+    # neither creates one, and neither is exercised against a real AWS
+    # account or Vault instance in this environment (see
+    # core/key_signer.py's module docstring).
     wal_path: str = "data/wal"
+    wal_signer_backend: Literal["file", "aws_kms", "vault_transit"] = "file"
+    wal_kms_key_id: str = ""
+    wal_vault_key_name: str = "legal-engine-wal"
+    wal_vault_url: str = "http://127.0.0.1:8200"
+    wal_vault_token: str = ""
 
     # API
     api_host: str = "0.0.0.0"

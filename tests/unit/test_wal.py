@@ -1,12 +1,8 @@
 import pytest
 
 from legal_engine.core.exceptions import WALIntegrityError
-from legal_engine.core.wal import (
-    GENESIS_HASH,
-    WriteAheadLog,
-    generate_signing_key,
-    load_or_create_signing_key,
-)
+from legal_engine.core.key_signer import Ed25519FileKeySigner, generate_signing_key
+from legal_engine.core.wal import GENESIS_HASH, WriteAheadLog
 
 
 class TestWriteAheadLog:
@@ -101,22 +97,22 @@ class TestWriteAheadLog:
             reloaded.verify()
 
 
-class TestLoadOrCreateSigningKey:
+class TestEd25519FileKeySignerLoadOrCreate:
     def test_generates_and_persists_a_key_when_none_exists(self, tmp_path):
         key_path = tmp_path / "signing_key.bin"
         assert not key_path.exists()
 
-        load_or_create_signing_key(key_path)
+        Ed25519FileKeySigner.load_or_create(key_path)
 
         assert key_path.exists()
         assert len(key_path.read_bytes()) == 32  # raw Ed25519 private key
 
     def test_reloading_returns_the_same_key(self, tmp_path):
         key_path = tmp_path / "signing_key.bin"
-        first = load_or_create_signing_key(key_path)
-        second = load_or_create_signing_key(key_path)
+        first = Ed25519FileKeySigner.load_or_create(key_path)
+        second = Ed25519FileKeySigner.load_or_create(key_path)
 
-        assert first.public_key().public_bytes_raw() == second.public_key().public_bytes_raw()
+        assert first.public_key_bytes == second.public_key_bytes
 
     def test_entries_signed_before_a_restart_still_verify_after(self, tmp_path):
         """The actual property this exists for: a WAL reloaded across a
@@ -127,16 +123,16 @@ class TestLoadOrCreateSigningKey:
         key_path = tmp_path / "signing_key.bin"
         wal_path = tmp_path / "audit.jsonl"
 
-        first_run_key = load_or_create_signing_key(key_path)
-        first_run = WriteAheadLog(first_run_key, path=wal_path)
+        first_run_signer = Ed25519FileKeySigner.load_or_create(key_path)
+        first_run = WriteAheadLog(first_run_signer, path=wal_path)
         first_run.append("legal_disclaimer_accepted", {"tenant_id": "tenant-a"})
 
-        second_run_key = load_or_create_signing_key(key_path)
-        second_run = WriteAheadLog(second_run_key, path=wal_path)
+        second_run_signer = Ed25519FileKeySigner.load_or_create(key_path)
+        second_run = WriteAheadLog(second_run_signer, path=wal_path)
         second_run.verify()  # should not raise
 
     def test_different_paths_get_independent_keys(self, tmp_path):
-        key_a = load_or_create_signing_key(tmp_path / "a.bin")
-        key_b = load_or_create_signing_key(tmp_path / "b.bin")
+        signer_a = Ed25519FileKeySigner.load_or_create(tmp_path / "a.bin")
+        signer_b = Ed25519FileKeySigner.load_or_create(tmp_path / "b.bin")
 
-        assert key_a.public_key().public_bytes_raw() != key_b.public_key().public_bytes_raw()
+        assert signer_a.public_key_bytes != signer_b.public_key_bytes

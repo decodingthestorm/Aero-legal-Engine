@@ -25,8 +25,14 @@ jobs:
         # several layers into its import chain), which is a Windows-
         # specific problem this Ubuntu runner doesn't have, so this is
         # where tests/unit/test_sparse_optimizer.py's real-computation
-        # tests actually get to run for real instead of skipping.
-        run: pip install -e ".[dev,api,workers,sparse-opt]"
+        # tests actually get to run for real instead of skipping. kms
+        # (boto3/hvac) is included so those packages' own installability
+        # is verified for real here too — core/key_signer.py's
+        # AwsKmsKeySigner/VaultTransitKeySigner tests use injected mock
+        # clients regardless of whether boto3/hvac are installed, so this
+        # isn't required for them to pass, just for the install itself to
+        # be checked.
+        run: pip install -e ".[dev,api,workers,sparse-opt,kms]"
 
       - name: Lint
         run: ruff check src tests

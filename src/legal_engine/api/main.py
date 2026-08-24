@@ -30,8 +30,9 @@ from legal_engine.api.routes import (
 )
 from legal_engine.compliance.consent import ConsentLedger
 from legal_engine.core.config import settings
+from legal_engine.core.key_signer_factory import build_key_signer
 from legal_engine.core.logging import configure_logging, get_logger
-from legal_engine.core.wal import WriteAheadLog, load_or_create_signing_key
+from legal_engine.core.wal import WriteAheadLog
 from legal_engine.formal_logic.solver_pool import SolverPool
 from legal_engine.ingestion.rate_limiter import PoliteFetcher
 from legal_engine.knowledge_graph.factory import build_embedder
@@ -61,13 +62,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await app.state.statute_repository.create_schema()
 
     # The audit/consent log (core/wal.py, compliance/consent.py). Loads the
-    # same signing key and replays the same JSON-Lines file across restarts
-    # — see load_or_create_signing_key's docstring for why a fresh random
-    # key every startup would silently break verify() on everything
-    # recorded before that restart.
+    # settings.wal_signer_backend-selected KeySigner (core/key_signer.py,
+    # core/key_signer_factory.py) and replays the same JSON-Lines file
+    # across restarts — see Ed25519FileKeySigner.load_or_create's
+    # docstring for why a fresh random key every startup would silently
+    # break verify() on everything recorded before that restart.
     wal_dir = Path(settings.wal_path)
-    signing_key = load_or_create_signing_key(wal_dir / "signing_key.bin")
-    app.state.wal = WriteAheadLog(signing_key, path=wal_dir / "audit.jsonl")
+    app.state.wal = WriteAheadLog(build_key_signer(), path=wal_dir / "audit.jsonl")
     # Replays app.state.wal's existing legal_disclaimer_accepted entries
     # once here, so every gated request afterward is an O(1) dict lookup
     # instead of a rescan — see compliance/consent.py's ConsentLedger.
@@ -87,7 +88,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Legal Engine Platform API", version="1.2.2", lifespan=lifespan)
+    app = FastAPI(title="Legal Engine Platform API", version="1.2.3", lifespan=lifespan)
     add_middleware(app)
 
     # /auth/token and /legal/disclaimer must stay unprotected (the former is

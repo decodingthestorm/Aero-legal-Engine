@@ -1,20 +1,24 @@
-"""SHA-384 / Ed25519 cryptographic append-only write-ahead log.
+"""SHA-384 / KeySigner-signed cryptographic append-only write-ahead log.
 
 Every entry is hash-chained to the one before it: ``payload_hash`` is a
 SHA-384 digest over the entry's sequence number, its predecessor's hash,
 and its own event type/payload/timestamp. Changing any past entry changes
 its hash, which changes every subsequent entry's hash — tampering anywhere
 in the chain is detectable from any later point, not just at the tampered
-entry. Each entry is additionally signed with Ed25519 over its own
-``payload_hash``, so an attacker with write access to the log file can't
-even recompute a consistent chain without the private key.
+entry. Each entry is additionally signed over its own ``payload_hash`` by
+whichever ``KeySigner`` (core/key_signer.py) this WAL was constructed
+with — by default a local Ed25519 key file, optionally AWS KMS or
+HashiCorp Vault's Transit engine — so an attacker with write access to the
+log file can't even recompute a consistent chain without that signer's
+private key material.
 
 Unlike knowledge_graph's Neo4j/Qdrant/sentence-transformers backends, there
 isn't a meaningful "lightweight test double" for a cryptographic audit
 log — a WAL that skips signing isn't a smaller version of this feature,
 it's a different feature that doesn't provide the guarantee the WAL exists
 for. So `cryptography` is a core dependency, not a lazy-imported optional
-backend.
+backend (KeySigner's own KMS/Vault backends are, though — see
+core/key_signer.py).
 """
 
 from __future__ import annotations
@@ -24,48 +28,11 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
-from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat
-
 from legal_engine.core.exceptions import WALIntegrityError
+from legal_engine.core.key_signer import KeySigner
 from legal_engine.core.models import WALEntry
 
 GENESIS_HASH = "0" * 96  # SHA-384 digests are 48 bytes = 96 hex chars
-
-
-def generate_signing_key() -> Ed25519PrivateKey:
-    return Ed25519PrivateKey.generate()
-
-
-def load_or_create_signing_key(path: Path) -> Ed25519PrivateKey:
-    """Loads the Ed25519 private key raw-bytes-encoded at ``path`` if it
-    exists, otherwise generates a fresh one and persists it there.
-
-    The WAL's signatures are only meaningful across process restarts if the
-    same key signs every entry — regenerating a random key on every startup
-    (what every caller of ``generate_signing_key()`` before this did) would
-    mean every previously-signed entry fails ``verify()`` against the new
-    public key the instant the process restarts, defeating the point of a
-    durable audit log.
-
-    The key is written to disk unencrypted. That's consistent with this
-    codebase's other plaintext-default secrets (``settings.jwt_secret``,
-    ``settings.api_client_secret`` — see their "change-me-in-production"
-    defaults), not a gap unique to this file: a real deployment wants this
-    in a proper secrets manager/KMS, not a bare file next to the audit log
-    it signs.
-    """
-    if path.exists():
-        return Ed25519PrivateKey.from_private_bytes(path.read_bytes())
-    key = generate_signing_key()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(
-        key.private_bytes(
-            encoding=Encoding.Raw, format=PrivateFormat.Raw, encryption_algorithm=NoEncryption()
-        )
-    )
-    return key
 
 
 def _compute_payload_hash(
@@ -86,16 +53,16 @@ def _compute_payload_hash(
 
 
 class WriteAheadLog:
-    """An in-process, hash-chained, Ed25519-signed append-only log.
+    """An in-process, hash-chained, cryptographically-signed append-only
+    log.
 
     Entries are held in memory and, if `path` is given, also persisted as
     JSON Lines (one WALEntry per line) — appended to on every ``append()``
     call and replayed on construction if the file already exists.
     """
 
-    def __init__(self, private_key: Ed25519PrivateKey, path: Path | None = None) -> None:
-        self._private_key = private_key
-        self._public_key: Ed25519PublicKey = private_key.public_key()
+    def __init__(self, signer: KeySigner, path: Path | None = None) -> None:
+        self._signer = signer
         self._entries: list[WALEntry] = []
         self._path = path
         if path is not None and path.exists():
@@ -106,7 +73,7 @@ class WriteAheadLog:
         prev_hash = self._entries[-1].payload_hash if self._entries else GENESIS_HASH
         timestamp = datetime.now(UTC)
         payload_hash = _compute_payload_hash(sequence, prev_hash, event_type, payload, timestamp)
-        signature = self._private_key.sign(bytes.fromhex(payload_hash)).hex()
+        signature = self._signer.sign(bytes.fromhex(payload_hash)).hex()
 
         entry = WALEntry(
             sequence=sequence,
@@ -142,12 +109,8 @@ class WriteAheadLog:
                     "hash — the entry's content has been altered after signing"
                 )
 
-            try:
-                self._public_key.verify(bytes.fromhex(entry.signature), bytes.fromhex(entry.payload_hash))
-            except InvalidSignature as exc:
-                raise WALIntegrityError(
-                    f"Entry {entry.sequence}: Ed25519 signature does not verify"
-                ) from exc
+            if not self._signer.verify(bytes.fromhex(entry.payload_hash), bytes.fromhex(entry.signature)):
+                raise WALIntegrityError(f"Entry {entry.sequence}: signature does not verify")
 
             expected_prev = entry.payload_hash
 

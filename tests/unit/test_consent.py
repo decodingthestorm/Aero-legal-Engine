@@ -2,7 +2,8 @@ import pytest
 
 from legal_engine.compliance.consent import DISCLAIMER_VERSION, ConsentLedger
 from legal_engine.core.exceptions import WALIntegrityError
-from legal_engine.core.wal import WriteAheadLog, generate_signing_key
+from legal_engine.core.key_signer import generate_signing_key
+from legal_engine.core.wal import WriteAheadLog
 
 TENANT_A = "tenant-a"
 TENANT_B = "tenant-b"

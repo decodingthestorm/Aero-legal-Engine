@@ -25,8 +25,14 @@ infrastructure (Kubernetes, HSM/KMS, managed Neo4j/Qdrant clusters) this environ
 build *or verify*, which is not how anything else in this codebase has been built. v1.2.2 pursues
 one more scoped slice of a follow-up version of that same roadmap: `ConsentLedger` (see "Liability
 disclaimer & consent" below) replaces the O(n) full-WAL-scan the consent gate originally ran on
-every request with an O(1) indexed projection, still exactly re-derivable from the WAL alone. This
-still doesn't mean "battle-tested production system" — read on for what would still take.
+every request with an O(1) indexed projection, still exactly re-derivable from the WAL alone.
+v1.2.3 takes the KMS/HSM item off that roadmap too, in scoped form: `KeySigner`
+(`core/key_signer.py`) abstracts WAL signing behind `sign()`/`verify()`, with the existing
+Ed25519-file backend as the default and lazy-imported AWS KMS/HashiCorp Vault adapters as
+real, dispatching alternatives — genuinely correct against the installed boto3/hvac packages'
+actual API contracts (verified by introspection, not memory), but not exercised against a live AWS
+account or Vault instance, which this environment doesn't have. This still doesn't mean
+"battle-tested production system" — read on for what would still take.
 
 ## What's built
 
@@ -81,17 +87,30 @@ still doesn't mean "battle-tested production system" — read on for what would 
   scraper tuned to one specific publisher's current markup, which would break on the next
   redesign anyway.
 
-- **`core/wal.py`** — `WriteAheadLog`: an append-only, SHA-384 hash-chained, Ed25519-signed
-  audit log. `verify()` replays the whole chain and catches any tampering with a past entry's
-  payload, its `prev_hash` link, or its signature. Unlike the knowledge_graph backends,
+- **`core/wal.py`** — `WriteAheadLog`: an append-only, SHA-384 hash-chained, cryptographically-
+  signed audit log. `verify()` replays the whole chain and catches any tampering with a past
+  entry's payload, its `prev_hash` link, or its signature. Unlike the knowledge_graph backends,
   `cryptography` is a hard dependency here, not a lazy-imported optional one — there's no
   meaningful lightweight version of "the audit log, but unsigned." Since v1.2.0 it's wired into
   the live API (`api/main.py`'s `lifespan`, not just the standalone
-  `tests/integration/test_ingest_to_proof.py` walkthrough it started as) via
-  `load_or_create_signing_key`, which persists the Ed25519 private key to disk (unencrypted —
-  see its docstring) so the same key signs every entry across restarts; a key regenerated on every
-  startup would make every entry recorded before that restart fail `verify()` against the new
-  public key. See "Liability disclaimer & consent" below for what it's actually used for so far.
+  `tests/integration/test_ingest_to_proof.py` walkthrough it started as).
+- **`core/key_signer.py`** — `KeySigner`: a `sign()`/`verify()` Protocol `WriteAheadLog` signs
+  through, so it doesn't need to know or care which backend actually holds the private key.
+  `Ed25519FileKeySigner` is the always-available default (persists an Ed25519 keypair to disk
+  unencrypted — see its own docstring for why that's an honest limitation, not a hidden one — so
+  the same key signs every entry across a restart; a key regenerated on every startup would make
+  every entry recorded before that restart fail `verify()` against the new public key).
+  `AwsKmsKeySigner`/`VaultTransitKeySigner` are lazy-imported optional backends (the `kms` extra:
+  boto3/hvac) matching every other "real backend" in this codebase — dispatch
+  (`core/key_signer_factory.py`, `settings.wal_signer_backend`) and fail-closed-with-install-hint
+  behavior are tested; their actual `sign()`/`verify()` request/response handling is unit-tested
+  against an injected mock client (`tests/unit/test_key_signer.py`), verified against the real
+  installed boto3/hvac packages' actual service model and method signatures (not memory) when this
+  was written, but never against a genuine AWS account or Vault instance, neither of which is
+  available here. `AwsKmsKeySigner` uses `ED25519_SHA_512` over an `ECC_NIST_EDWARDS25519` KMS
+  key — AWS KMS does support Ed25519 natively (confirmed by introspecting botocore's own KMS
+  service model, correcting an initial assumption that it was RSA/NIST-ECC only), so this matches
+  `Ed25519FileKeySigner`'s algorithm rather than switching families.
 - **`compliance/consent.py`** — per-tenant liability-disclaimer acceptance, recorded as WAL entries
   rather than a separate consent table. See "Liability disclaimer & consent" below.
 - **`workers/`** — a real Celery app (`celery_app.py`, Redis broker/backend, matching
@@ -229,10 +248,14 @@ tenant never unblocks another (same isolation guarantee as the data-isolation se
 `refactoring`/`graph`/`ingestion` stay ungated by this, since they're not what the disclaimer is
 about.
 
-**What this still isn't**: the WAL's signing key is persisted to disk unencrypted
-(`load_or_create_signing_key` in `core/wal.py`) — real production hardening wants that in a
-secrets manager/KMS, not a bare file next to the log it signs, the same gap this codebase's other
-plaintext-default secrets (`jwt_secret`, `api_client_secret`) already have. The consent check itself
+**What this still isn't**: by default, the WAL's signing key is still persisted to disk
+unencrypted (`Ed25519FileKeySigner`, `core/key_signer.py`) — the same gap this codebase's other
+plaintext-default secrets (`jwt_secret`, `api_client_secret`) already have. `settings.wal_signer_backend`
+can now point this at AWS KMS or HashiCorp Vault instead (see the `core/key_signer.py` bullet
+above), which is real, dispatching code — but neither has been exercised against an actual AWS
+account or Vault instance, so treat "the abstraction and request/response handling are correct
+against the documented API contracts" as established, not "this has been proven against a live
+KMS/Vault." The consent check itself
 is now O(1) (`ConsentLedger`, above) rather than an O(n) WAL scan, but the ledger is still an
 in-process, in-memory projection rebuilt by a single full replay at startup — fine at this system's
 current scale (and current WAL size), not something that's been load-tested the way
@@ -376,14 +399,15 @@ Read this before treating any of the above as more finished than it is:
   is a genuine feature to build deliberately, not a drop-in.
 - **The liability-disclaimer consent record is real (tamper-evident, tied to a server-verified
   token subject, tenant-scoped, and — since `ConsentLedger` — an O(1) indexed lookup rather than a
-  WAL scan) but its supporting infrastructure is still minimal.** The WAL's Ed25519 signing key is
-  a plaintext file on disk (`load_or_create_signing_key`) — fine for this environment, not where a
-  real deployment wants its signing key. There's no way to revoke or amend an acceptance once
-  recorded (append-only is the point, but that also means no "the tenant's authorized signer
-  changed" flow exists yet), and `ConsentLedger` itself is an in-process index rebuilt by a full
-  WAL replay at every startup, not a persisted index of its own — untested at any real scale (WAL
-  size, replay time, or concurrent tenant count). See "Liability disclaimer & consent" above for
-  what it does establish.
+  WAL scan) but its supporting infrastructure is still minimal.** The WAL's signing key is a
+  plaintext file on disk by default (`Ed25519FileKeySigner`) — `settings.wal_signer_backend` can
+  point this at AWS KMS or Vault instead (`core/key_signer.py`), real dispatching code, but neither
+  path has been exercised against an actual AWS account or Vault instance. There's no way to revoke
+  or amend an acceptance once recorded (append-only is the point, but that also means no "the
+  tenant's authorized signer changed" flow exists yet), and `ConsentLedger` itself is an in-process
+  index rebuilt by a full WAL replay at every startup, not a persisted index of its own — untested
+  at any real scale (WAL size, replay time, or concurrent tenant count). See "Liability disclaimer
+  & consent" above for what it does establish.
 - **Load testing has been run a few times, at up to 300 concurrent users, on one machine.** That's
   real evidence the concurrency fix holds, that the Z3 timeout budget is respected even under heavy
   queueing, and that larger response payloads don't change that — it is not evidence of behavior at
