@@ -24,7 +24,7 @@ from datetime import UTC, datetime
 from typing import Literal, cast
 from uuid import UUID
 
-from sqlalchemy import Text, select
+from sqlalchemy import DateTime, Text, select
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -87,12 +87,25 @@ class StatuteRecord(Base):
     title: Mapped[str] = mapped_column(nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     source_url: Mapped[str | None] = mapped_column(nullable=True)
+    # Deliberately *not* TIMESTAMPTZ. Whether an effective date carries a
+    # timezone is a fact about the source document, not about our clock, so
+    # this column stores what the document said. _naive_utc below strips an
+    # offset (converting to UTC first) on the way in, so asyncpg never sees
+    # an aware value bound to a naive column.
     effective_date: Mapped[datetime | None] = mapped_column(nullable=True)
     geo_lat_min: Mapped[float | None] = mapped_column(nullable=True)
     geo_lat_max: Mapped[float | None] = mapped_column(nullable=True)
     geo_lon_min: Mapped[float | None] = mapped_column(nullable=True)
     geo_lon_max: Mapped[float | None] = mapped_column(nullable=True)
-    ingested_at: Mapped[datetime] = mapped_column(nullable=False)
+    # TIMESTAMPTZ, not a bare timestamp. asyncpg refuses to bind a
+    # timezone-aware datetime to TIMESTAMP WITHOUT TIME ZONE, and this
+    # value is aware by construction (core/models.py's _utcnow), so a
+    # naive column makes every Postgres write fail. SQLite has no native
+    # timestamp type and ignores the flag, returning naive either way —
+    # which is what _as_utc above is for. The two are complements, not
+    # alternatives: timezone=True fixes the write path on Postgres,
+    # _as_utc fixes the read path on SQLite.
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     # JSON-encoded list[str] rather than a join table: entity ids are plain
     # opaque strings everywhere else in the system (see
     # knowledge_graph/graph_service.py), so a normalized association table
@@ -100,6 +113,20 @@ class StatuteRecord(Base):
     # system never queries *by* entity at the SQL level — only ever reads
     # back whole, to hand to GraphService.add_statute on startup rehydration.
     applies_to_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+
+
+def _naive_utc(value: datetime | None) -> datetime | None:
+    """Strips the offset from an aware datetime, converting to UTC first.
+
+    Only for columns that are deliberately naive (``effective_date``).
+    asyncpg raises rather than silently coercing when an aware value is
+    bound to TIMESTAMP WITHOUT TIME ZONE, and SQLite accepts it — so
+    without this, a source document that happened to carry a timezone
+    would work in every test and fail in production.
+    """
+    if value is None or value.tzinfo is None:
+        return value
+    return value.astimezone(UTC).replace(tzinfo=None)
 
 
 def _to_domain(record: StatuteRecord) -> StatuteDocument:
@@ -148,7 +175,7 @@ def _from_domain(statute: StatuteDocument, tenant_id: str) -> StatuteRecord:
         title=statute.title,
         text=statute.text,
         source_url=statute.source_url,
-        effective_date=statute.effective_date,
+        effective_date=_naive_utc(statute.effective_date),
         geo_lat_min=statute.geo_boundary.lat_min if statute.geo_boundary else None,
         geo_lat_max=statute.geo_boundary.lat_max if statute.geo_boundary else None,
         geo_lon_min=statute.geo_boundary.lon_min if statute.geo_boundary else None,
@@ -224,7 +251,8 @@ class UserRecord(Base):
     # for what this does and doesn't gate.
     role: Mapped[str] = mapped_column(nullable=False, default="owner")
     email_verified: Mapped[bool] = mapped_column(nullable=False, default=False)
-    created_at: Mapped[datetime] = mapped_column(nullable=False)
+    # TIMESTAMPTZ for the same reason as StatuteRecord.ingested_at.
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 def _user_to_domain(record: UserRecord) -> UserAccount:

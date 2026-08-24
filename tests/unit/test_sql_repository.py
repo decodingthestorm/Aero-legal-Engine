@@ -12,7 +12,7 @@ a StaticPool, which a temp file sidesteps entirely.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -100,6 +100,21 @@ class TestSqlAlchemyStatuteRepository:
         await repo.add(statute, TENANT_A)
         fetched = await repo.get(statute.id, TENANT_A)
         assert fetched.effective_date == naive
+        assert fetched.effective_date.tzinfo is None
+
+    async def test_aware_effective_date_is_stored_as_the_same_utc_instant(self, repo):
+        """effective_date's column is deliberately naive, and asyncpg
+        raises rather than coercing when an aware value is bound to one —
+        so _naive_utc converts to UTC and drops the offset on the way in.
+        SQLite would accept the aware value happily, which is exactly why
+        this needs asserting here rather than being left to Postgres."""
+        aware = datetime(2024, 1, 1, 15, 30, tzinfo=timezone(timedelta(hours=3)))
+        statute = _statute(effective_date=aware)
+        await repo.add(statute, TENANT_A)
+
+        fetched = await repo.get(statute.id, TENANT_A)
+
+        assert fetched.effective_date == datetime(2024, 1, 1, 12, 30)  # noqa: DTZ001
         assert fetched.effective_date.tzinfo is None
 
     async def test_applies_to_round_trips(self, repo):
