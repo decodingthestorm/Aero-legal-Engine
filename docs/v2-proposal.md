@@ -9,8 +9,9 @@ semantic-entropy hallucination gate, ZKP circuit compilation via CirC/cvc5,
 schema-per-tenant Postgres with RFC 3161 timestamping, and a Stackelberg differential
 game simulator.
 
-Two nodes have been adopted and shipped (semantic entropy, v1.9.0; RFC 3161 timestamping,
-v1.10.0). Two more are buildable here and remain open. Two cannot be built or verified in this environment. Six defects were
+Four nodes have been adopted and shipped: semantic entropy (v1.9.0), RFC 3161 timestamping
+(v1.10.0), and — in reduced but honest form — deontic reasoning and the regulatory control
+problem (both v1.11.0). Two cannot be built or verified in this environment. Six defects were
 found that are wrong independent of tooling — two of them provably so, and one is a
 cross-tenant data leak in the isolation model the spec chose *for* isolation.
 
@@ -96,7 +97,7 @@ Related: the spec's dynamic `ALTER USER ... CONNECTION LIMIT` load-shedding is a
 DDL change triggered by a 150 ms RTT sample, and does not affect already-established
 pooled connections.
 
-### 4. `ABS_02` halts on the normal case
+### 4. `ABS_02` halts on the normal case — **fixed in v1.11.0**
 
 The trigger fires when the preference relation `⪰` "yields equal optimality over
 conflicting norm worlds."
@@ -104,10 +105,13 @@ conflicting norm worlds."
 Åqvist's System E mandates *totalness* of `⪰`, so ties are ubiquitous and `Opt(φ)` is
 almost always a multi-world set. As written, the gate fires during ordinary operation.
 
-**Correction:** trigger on `Opt(φ)` containing worlds that *disagree on ψ* — i.e. neither
-`O(ψ|φ)` nor `O(¬ψ|φ)` holds. That is the actual normative dilemma.
+**Correction, shipped:** `deontic/system_e.py`. `Verdict.is_dilemma` triggers on `Opt(φ)`
+containing worlds that *disagree on ψ* — neither `O(ψ|φ)` nor `O(¬ψ|φ)` holding. A tie among
+optimal worlds that still determines ψ is not a dilemma, and there's a test for exactly that
+case. Vacuous `Opt(φ)` is reported separately, since it makes both an obligation and its
+negation true.
 
-### 5. `NODE_06` contradicts itself
+### 5. `NODE_06` contradicts itself — **resolved in v1.11.0**
 
 It mandates "linear-quadratic semiconcave problem structure" **and** a "unique viscosity
 solution" computed by implicit finite differences.
@@ -121,6 +125,14 @@ also specifies, it isn't LQ.
 Separately, "reduce bilevel optimization to a single stochastic control problem via exact
 first-order potential game conditions" is asserted, not established. Stackelberg games do
 not generically admit a potential-game reduction.
+
+**Resolution, shipped:** `game_theory/hjb.py`. The two are not alternatives — the
+finite-difference sweep is the general tool and the LQ closed form is its *test oracle*. The
+solver discretises the equation as written and knows nothing about the quadratic structure;
+`riccati_solution` computes the exact answer independently; the tests check both agreement and
+that the error falls at the second-order rate. The potential-game reduction is not adopted: what
+ships is the single-agent control problem, labelled as such, not a two-player equilibrium
+relabelled.
 
 ### 6. It forbids the isolation model this repo already proves
 
@@ -141,8 +153,8 @@ forbidden without addressing any of that is not an upgrade.
 |---|---|
 | `NODE_03` Semantic entropy gate | **Shipped v1.9.0**, with defect 1 corrected |
 | `NODE_05` RFC 3161 timestamping | **Shipped v1.10.0.** `core/timestamper.py`. Anchors the WAL's head hash rather than stamping each entry — the chain already commits backwards, so one token attests the whole log. Verifies status, nonce, imprint, and hash algorithm; deliberately does *not* verify the TSA signature, since `cryptography` exposes no CMS verification API and hand-rolling it would be worse than deferring to `openssl ts -verify`. |
-| `NODE_01` Deontic reasoning | **Open, buildable in reduced form.** Isabelle isn't available, but `Opt(φ)` and `O(ψ|φ)` over a *finite* world set with an explicit betterness relation is decidable and directly implementable, checkable against Chisholm's Paradox and gentle murder. Would also fix defect 4. Must be labelled finite-model evaluation, not HOL theorem proving. |
-| `NODE_06` Stackelberg simulator | **Open, buildable in reduced form.** Drop the jump term and the potential-game reduction; a 1-D finite-difference HJB validated against the closed-form LQ Riccati solution is real work with numpy/scipy. Resolves defect 5 by construction. |
+| `NODE_01` Deontic reasoning | **Shipped v1.11.0** in reduced form. `deontic/`. Finite-model evaluation of Åqvist System E — decidable by enumeration, exact, always terminates — checked against Chisholm's Paradox and Forrester's gentle murder. Labelled finite-model evaluation, not HOL theorem proving; nothing touches the EPR compiler. Fixes defect 4. |
+| `NODE_06` Stackelberg simulator | **Shipped v1.11.0** in reduced form. `game_theory/hjb.py`. 1-D finite-difference HJB validated against the closed-form Riccati solution, including at the correct second-order convergence rate. No jump term, one state dimension, and single-agent rather than Stackelberg — each stated in the module. Resolves defect 5. |
 | `NODE_02` vLLM / XGrammar extraction | **Not buildable.** vLLM has no native Windows support; torch's DLLs are blocked here; 12 GB VRAM won't serve batch `N=256` for a legal-grade model. |
 | `NODE_04` ZKP compilation | **Not buildable.** No circom, ZoKrates, or cvc5; Groth16/PLONK also needs a trusted setup. |
 | `NODE_05` schema-per-tenant migration | **Not adopted.** See defects 3 and 6. |

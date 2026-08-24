@@ -92,6 +92,15 @@ honestly-flagged gap from the version before it — never a rewrite, always addi
   nodes to ship, and the only one of its infrastructure items that closed a real gap rather than
   restating a solved one.
 
+- **v1.11.0** — the v2.0 proposal's last two buildable nodes, each correcting one of its defects by
+  construction. `deontic/` evaluates Åqvist System E over finite preference models and survives
+  Chisholm's Paradox and Forrester's gentle-murder paradox — and distinguishes a *tie* among optimal
+  worlds (ordinary, and what the spec's `ABS_02` would have halted on) from a real dilemma, where
+  the optimal worlds disagree. `game_theory/hjb.py` solves the regulator's Hamilton-Jacobi-Bellman
+  equation by finite differences, checked against the closed-form Riccati solution the spec's own
+  "linear-quadratic" claim implies — resolving its demand for LQ structure *and* viscosity solutions
+  by making the closed form the solver's test oracle rather than its competitor.
+
 None of this means "battle-tested production system" — read on for what would still take.
 
 ## What's built
@@ -183,6 +192,14 @@ None of this means "battle-tested production system" — read on for what would 
   verifies and what it deliberately doesn't.
 - **`compliance/consent.py`** — per-tenant liability-disclaimer acceptance, recorded as WAL entries
   rather than a separate consent table. See "Liability disclaimer & consent" below.
+- **`deontic/`** — dyadic deontic logic (Åqvist System E) over finite preference models:
+  conditional obligation `O(ψ|φ)` evaluated at the *best* φ-worlds, which is what lets a secondary
+  obligation govern an already-violated primary one without the two colliding. Decidable by
+  enumeration, deliberately separate from `formal_logic/`'s EPR compiler. See "Deontic reasoning"
+  below.
+- **`game_theory/hjb.py`** — the regulator's continuous-time control problem: choose enforcement
+  intensity against a drifting, noisy compliance gap. A finite-difference HJB solver plus the exact
+  Riccati solution it's validated against. See "Regulatory control" below.
 - **`uncertainty/`** — semantic entropy over bidirectional-entailment clusters, as an abstention
   gate for stochastic (LLM) output: sample the same question N times, group the samples by
   *meaning* rather than by string, and take the Shannon entropy of that distribution. Consistent
@@ -582,6 +599,82 @@ one of those "optional" dependencies turned out to already be installed in a bro
 git history on `knowledge_graph/embeddings.py` for what that surfaced). `api` and `workers` are
 deployment-role extras (a library-only user shouldn't need FastAPI or Celery pulled in) rather
 than lazy-backend extras; CI installs both to cover their tests.
+
+### Deontic reasoning
+
+Added in v1.11.0 (`deontic/`). Standard Deontic Logic breaks on *contrary-to-duty* obligations —
+what you ought to do given that you've already failed to do what you ought. Both classic
+counterexamples derive outright contradictions in SDL, and both are the natural shape of a
+compliance question, which is why this matters here rather than being a curiosity.
+
+Conditional obligation is evaluated at the **best** antecedent-worlds:
+
+```
+Opt(φ) = { w ∈ W : w ⊨ φ and ∀w' ∈ W (w' ⊨ φ → w ⪰ w') }
+O(ψ | φ)  ⟺  ∀w ∈ Opt(φ): w ⊨ ψ
+```
+
+- **Chisholm's Paradox** — Jones ought to help his neighbours; if he goes he ought to tell them; if
+  he doesn't go he ought not tell them; he doesn't go. All four hold simultaneously here, and no
+  contradiction is derivable, because the three obligations are evaluated at three *different*
+  optimal sets rather than collapsing into one.
+- **Forrester's gentle murder** — Smith ought not murder; if he murders he ought to do it gently;
+  "gently" entails "murders." SDL detaches an obligation *to murder*. Blocked here:
+  `O(gently | murders)` is evaluated at the best murder-worlds, which are not the best worlds.
+
+**A tie is not a dilemma.** The source specification proposed halting whenever the betterness
+relation "yields equal optimality over conflicting norm worlds" — i.e. on ties. System E requires
+totalness of `⪰`, so ties are ubiquitous and `Opt(φ)` is almost always a multi-world set; that gate
+would fire during ordinary operation. What actually indicates a dilemma is the optimal worlds
+*disagreeing about ψ*, leaving neither `O(ψ|φ)` nor `O(¬ψ|φ)` true. `Verdict.is_dilemma` tests
+that, and there's a test with a genuine tie that determines its subject perfectly well.
+
+Vacuity is reported separately: when `Opt(φ)` is empty, *every* obligation conditional on φ holds,
+including a proposition and its negation — classically correct, practically a red flag, and a
+different condition from a dilemma.
+
+**What this still isn't**: finite-model *evaluation*, not theorem proving. It answers "does this
+hold in the model you gave me," not "is this a theorem of E." The obvious alternative — the LogiKEy
+shallow embedding in Isabelle/HOL — is more powerful and weaker in a different way, since HOL is
+undecidable and `sledgehammer` can simply not return. This codebase already stakes a decidability
+claim on `formal_logic/`'s EPR fragment; presenting an undecidable engine as a strengthening would
+misrepresent both, and nothing here touches the EPR compiler. Limitedness — every satisfiable φ
+having a non-empty `Opt(φ)` — comes free on finite models, so the axiom Åqvist needs in general is
+a theorem here.
+
+### Regulatory control
+
+Added in v1.11.0 (`game_theory/hjb.py`). A regulator watches a compliance gap `x` and picks an
+enforcement intensity `u`; the gap drifts and gets shocked, `dx = (a·x + b·u) dt + σ dW`, and the
+regulator trades the harm of non-compliance (`q·x²`) against the cost of enforcement (`r·u²`).
+Auditing isn't free, and a regulator that ignores that will over-enforce.
+
+**The spec defect this resolves.** It mandated linear-quadratic structure *and* a "unique viscosity
+solution" by implicit finite differences. Those pull opposite ways: viscosity solutions are the
+machinery for when the value function *isn't* smooth, but if the problem is genuinely LQ then `V`
+is a smooth quadratic, the HJB collapses to a Riccati ODE, and you can write the answer down.
+
+The resolution isn't to pick one — it's that they stand in a different relationship than the spec
+supposed. The finite-difference sweep is the general tool; the LQ closed form is its **test
+oracle**. `solve_hjb` knows nothing about the quadratic structure and discretises the equation as
+written; `riccati_solution` computes the exact answer independently; the tests check they agree
+*and* that the error falls at the second-order rate central differences should give. Agreement to a
+tolerance can be luck on one grid — a sign error or mis-centred stencil usually still converges,
+just at first order — so the rate is the check that's hard to fake.
+
+**It refuses σ = 0** rather than returning `NaN`. With no diffusion the equation is pure advection,
+and forward-Euler with central differences is *unconditionally* unstable there — no time step
+helps. Upwinding would fix stability at the cost of dropping to first order, which would also cost
+the convergence-rate check. The deterministic case has an exact solution anyway, and the error says
+so.
+
+**What this still isn't**: no jump term (the spec's compensated Poisson measure would make this a
+partial integro-differential equation and leave no closed form to validate against), one state
+dimension, and **not a Stackelberg game**. The spec described a leader-follower equilibrium and
+asserted it reduces to a single control problem "via exact first-order potential game conditions";
+Stackelberg games don't generically admit that reduction and the structure justifying one was never
+established. What's solved here is the single-agent control problem honestly, not a two-player
+equilibrium relabelled.
 
 ### Trusted timestamping
 
