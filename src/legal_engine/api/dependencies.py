@@ -14,8 +14,13 @@ allowed at all," while ``get_current_tenant`` (injected only by the
 graph.py routes that actually touch tenant-scoped data — verification/
 simulation/refactoring have no persisted state to isolate) answers "which
 tenant's data does this request see." Keeping them separate, rather than
-unifying into one dependency, costs a small duplicated JWT decode per
-request in exchange for each one staying simple and single-purpose.
+unifying into one dependency, costs a small duplicated call to
+``_decode_bearer_token`` per request in exchange for each one staying
+simple and single-purpose. ``_decode_bearer_token`` itself is shared
+between them (unlike the two functions above it) because the header-
+parsing/revocation/token_type checks it does are exactly the same
+regardless of which claim the caller ultimately wants — duplicating
+*that* would just be duplicating the error-prone part for no benefit.
 """
 
 from __future__ import annotations
@@ -24,8 +29,9 @@ from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request, status
 
-from legal_engine.api.security import InvalidTokenError, get_token_tenant, verify_token
+from legal_engine.api.security import InvalidTokenError, decode_token
 from legal_engine.compliance.consent import DISCLAIMER_VERSION, ConsentLedger
+from legal_engine.compliance.token_ledger import TokenLedger
 from legal_engine.core.config import settings
 from legal_engine.core.wal import WriteAheadLog
 from legal_engine.formal_logic.solver_pool import SolverPool
@@ -38,6 +44,35 @@ from legal_engine.persistence.repository import StatuteRepository
 from legal_engine.persistence.user_repository import UserRepository
 
 
+def _decode_bearer_token(request: Request) -> dict:
+    """Shared by get_current_tenant/require_auth below. Rejects (401): a
+    missing/malformed header, a token that fails decode_token's own
+    signature/expiry checks, a refresh token presented here (refresh
+    tokens are only ever redeemed at POST /auth/refresh — never valid as
+    a regular bearer token), or a token whose jti is on record as
+    revoked (compliance/token_ledger.py's TokenLedger)."""
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
+
+    try:
+        payload = decode_token(auth_header.removeprefix("Bearer "))
+    except InvalidTokenError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+
+    if payload.get("token_type") != "access":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh tokens cannot be used as a bearer token — see POST /auth/refresh",
+        )
+
+    token_ledger: TokenLedger = request.app.state.token_ledger
+    if token_ledger.is_revoked(payload.get("jti", "")):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token has been revoked")
+
+    return payload
+
+
 async def get_current_tenant(request: Request) -> str:
     """Returns settings.default_tenant_id when auth is disabled (the
     default — the whole deployment behaves as one tenant, unchanged from
@@ -46,14 +81,13 @@ async def get_current_tenant(request: Request) -> str:
     if not settings.api_auth_enabled:
         return settings.default_tenant_id
 
-    auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
-
-    try:
-        return get_token_tenant(auth_header.removeprefix("Bearer "))
-    except InvalidTokenError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    payload = _decode_bearer_token(request)
+    tenant_id = payload.get("tenant_id")
+    if not tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Token is missing a tenant_id claim"
+        )
+    return str(tenant_id)
 
 
 def get_tenant_registry(request: Request) -> TenantIndexRegistry:
@@ -102,22 +136,24 @@ def get_consent_ledger(request: Request) -> ConsentLedger:
     return request.app.state.consent_ledger
 
 
+def get_token_ledger(request: Request) -> TokenLedger:
+    return request.app.state.token_ledger
+
+
 async def require_auth(request: Request) -> str | None:
     """No-ops (returns None) when settings.api_auth_enabled is False — the
     default, and what every other test in this suite runs against. When
-    enabled, requires a valid ``Authorization: Bearer <token>`` header
-    (issued by POST /auth/token) and returns the token's subject."""
+    enabled, requires a valid, non-revoked, non-refresh ``Authorization:
+    Bearer <token>`` header (issued by POST /auth/token or
+    /auth/register) and returns the token's subject."""
     if not settings.api_auth_enabled:
         return None
 
-    auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
-
-    try:
-        return verify_token(auth_header.removeprefix("Bearer "))
-    except InvalidTokenError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    payload = _decode_bearer_token(request)
+    subject = payload.get("sub")
+    if not subject:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token is missing a subject")
+    return str(subject)
 
 
 async def require_consent(request: Request, tenant_id: Annotated[str, Depends(get_current_tenant)]) -> None:
@@ -149,4 +185,5 @@ StatuteRepositoryDep = Annotated[StatuteRepository, Depends(get_statute_reposito
 UserRepositoryDep = Annotated[UserRepository, Depends(get_user_repository)]
 WalDep = Annotated[WriteAheadLog, Depends(get_wal)]
 ConsentLedgerDep = Annotated[ConsentLedger, Depends(get_consent_ledger)]
+TokenLedgerDep = Annotated[TokenLedger, Depends(get_token_ledger)]
 TenantIdDep = Annotated[str, Depends(get_current_tenant)]

@@ -1,4 +1,5 @@
-"""Token issuance, plus self-service tenant/user registration.
+"""Token issuance, self-service tenant/user registration, and token
+lifecycle (refresh rotation, revocation).
 
 POST /token predates POST /register: there's still exactly one hardcoded
 demo credential (settings.api_client_id/api_client_secret) that always
@@ -13,6 +14,15 @@ into a tenant that already has one is a real, separate feature (needs an
 actual notion of who's allowed to invite whom) this doesn't build. That
 scope cut is why UserRepository has no "list users in a tenant" method:
 every tenant has exactly one user, for now.
+
+POST /refresh redeems a still-valid, not-yet-used refresh token for a new
+access+refresh pair — single-use rotation (compliance/token_ledger.py):
+the old refresh token is spent the instant it's used, so a second attempt
+to reuse it (theft signal) fails closed rather than silently succeeding.
+
+POST /revoke: possession of a token (access or refresh) is the
+authorization to revoke it — matches ordinary "logout" semantics, no
+separate auth check needed beyond having the token itself.
 """
 
 from __future__ import annotations
@@ -22,12 +32,29 @@ from uuid import uuid4
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 
-from legal_engine.api.dependencies import UserRepositoryDep
-from legal_engine.api.security import create_token, hash_password, verify_password
+from legal_engine.api.dependencies import TokenLedgerDep, UserRepositoryDep
+from legal_engine.api.security import (
+    InvalidTokenError,
+    create_token,
+    decode_token,
+    hash_password,
+    verify_password,
+)
 from legal_engine.core.config import settings
 from legal_engine.core.models import UserAccount
 
 router = APIRouter()
+
+
+def _issue_token_pair(subject: str, tenant_id: str) -> tuple[str, str]:
+    access_token = create_token(subject=subject, tenant_id=tenant_id)
+    refresh_token = create_token(
+        subject=subject,
+        tenant_id=tenant_id,
+        token_type="refresh",
+        expires_minutes=settings.refresh_token_expires_days * 24 * 60,
+    )
+    return access_token, refresh_token
 
 
 class TokenRequest(BaseModel):
@@ -67,6 +94,18 @@ class RegisterResponse(BaseModel):
     expires_in_minutes: int
 
 
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
+class RevokeRequest(BaseModel):
+    token: str
+
+
+class RevokeResponse(BaseModel):
+    revoked: bool
+
+
 @router.post("/register", response_model=RegisterResponse)
 async def register(request: RegisterRequest, user_repository: UserRepositoryDep) -> RegisterResponse:
     if await user_repository.get_by_email(request.email) is not None:
@@ -78,13 +117,7 @@ async def register(request: RegisterRequest, user_repository: UserRepositoryDep)
     )
     await user_repository.add(user)
 
-    access_token = create_token(subject=user.email, tenant_id=tenant_id)
-    refresh_token = create_token(
-        subject=user.email,
-        tenant_id=tenant_id,
-        token_type="refresh",
-        expires_minutes=settings.refresh_token_expires_days * 24 * 60,
-    )
+    access_token, refresh_token = _issue_token_pair(user.email, tenant_id)
     return RegisterResponse(
         tenant_id=tenant_id,
         access_token=access_token,
@@ -103,13 +136,43 @@ async def issue_token(request: TokenRequest, user_repository: UserRepositoryDep)
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid client credentials")
         subject, tenant_id = user.email, user.tenant_id
 
-    access_token = create_token(subject=subject, tenant_id=tenant_id)
-    refresh_token = create_token(
-        subject=subject,
-        tenant_id=tenant_id,
-        token_type="refresh",
-        expires_minutes=settings.refresh_token_expires_days * 24 * 60,
-    )
+    access_token, refresh_token = _issue_token_pair(subject, tenant_id)
     return TokenResponse(
         access_token=access_token, refresh_token=refresh_token, expires_in_minutes=settings.jwt_expires_minutes
     )
+
+
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh(request: RefreshRequest, token_ledger: TokenLedgerDep) -> TokenResponse:
+    try:
+        payload = decode_token(request.refresh_token)
+    except InvalidTokenError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+
+    if payload.get("token_type") != "refresh":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not a refresh token")
+
+    subject, tenant_id, jti = payload.get("sub", ""), payload.get("tenant_id", ""), payload.get("jti", "")
+    if not token_ledger.redeem_refresh_token(jti, tenant_id):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token has already been used or revoked",
+        )
+
+    access_token, new_refresh_token = _issue_token_pair(subject, tenant_id)
+    return TokenResponse(
+        access_token=access_token, refresh_token=new_refresh_token, expires_in_minutes=settings.jwt_expires_minutes
+    )
+
+
+@router.post("/revoke", response_model=RevokeResponse)
+async def revoke(request: RevokeRequest, token_ledger: TokenLedgerDep) -> RevokeResponse:
+    try:
+        payload = decode_token(request.token)
+    except InvalidTokenError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+
+    token_ledger.revoke(
+        payload.get("jti", ""), payload.get("tenant_id", ""), reason="client-requested revocation"
+    )
+    return RevokeResponse(revoked=True)

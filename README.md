@@ -3,41 +3,39 @@
 A legal ingestion, formal verification, and game-theoretic statutory optimization platform.
 
 v1.0.0 marked the completion of the 5-phase build plan below: every subsystem the original spec
-called for exists and has a passing test suite. v1.1.0 closed three of the five items that v1.0.0's
-Known Limitations honestly flagged as open — startup reindexing, cross-browser E2E coverage, and
-load-test hardening (including a graceful-degradation path for genuine solver timeouts) — leaving
-two deliberately not done: multi-tenant auth and a liability-disclaimer UI. v1.2.0 closes both, but
-not in the form originally proposed for either: multi-tenant isolation is real end-to-end scoping
-(`StatuteRepository`, `GraphService`, and `VectorIndex` all driven by the JWT's `tenant_id` claim —
-see "Multi-tenant data isolation" below), not just a token check; and the liability item is a
-one-time, per-tenant, cryptographically-logged disclaimer acceptance (see "Liability disclaimer &
-consent" below), not a per-request header or a client-side modal — both of those were assessed and
-rejected as security theater (client-controlled, no enforcement teeth, easy to characterize as
-manufactured compliance rather than genuine consent) before building what's here instead. v1.2.1
-adds an $L_1$-sparse alternative to `refactoring/`'s existing minimum-norm loophole correction —
-one deliberately narrow, self-contained slice of a much larger proposed roadmap (neuro-symbolic
-LLM ingestion, modal deontic/temporal/epistemic logic, multi-agent reinforcement learning, ZK-SNARK
-compliance proofs, HSM-backed signing, Kubernetes autoscaling) that was assessed and **not**
-pursued wholesale: several of those pillars would either compromise the EPR core's decidability
-guarantee (modal logic's Kripke semantics generically require quantifier alternation outside the
-`exists*-forall*` fragment `formal_logic/` has guaranteed since Phase 1) or require cloud
-infrastructure (Kubernetes, HSM/KMS, managed Neo4j/Qdrant clusters) this environment has no way to
-build *or verify*, which is not how anything else in this codebase has been built. v1.2.2 pursues
-one more scoped slice of a follow-up version of that same roadmap: `ConsentLedger` (see "Liability
-disclaimer & consent" below) replaces the O(n) full-WAL-scan the consent gate originally ran on
-every request with an O(1) indexed projection, still exactly re-derivable from the WAL alone.
-v1.2.3 takes the KMS/HSM item off that roadmap too, in scoped form: `KeySigner`
-(`core/key_signer.py`) abstracts WAL signing behind `sign()`/`verify()`, with the existing
-Ed25519-file backend as the default and lazy-imported AWS KMS/HashiCorp Vault adapters as
-real, dispatching alternatives — genuinely correct against the installed boto3/hvac packages'
-actual API contracts (verified by introspection, not memory), but not exercised against a live AWS
-account or Vault instance, which this environment doesn't have. v1.3.0 goes after the other
-long-standing gap the "Known limitations" section flagged in its own words: `POST /auth/register`
-(see "User registration & login" below) is a real, self-service user/tenant registry — the
-"no user/tenant registration system to provision a second real credential" line is no longer true.
-Token revocation and refresh-token redemption are the deliberately-separate next piece, not yet
-built as of this version (see Known limitations). This still doesn't mean "battle-tested production
-system" — read on for what would still take.
+called for exists and has a passing test suite. Every version since has closed one specific,
+honestly-flagged gap from the version before it — never a rewrite, always additive:
+
+- **v1.1.0** — closed 3 of v1.0.0's 5 Known Limitations: startup reindexing, cross-browser E2E
+  coverage, and load-test hardening (a graceful-degradation path for genuine solver timeouts).
+- **v1.2.0** — closed the other 2, but not as originally proposed for either. Multi-tenant auth:
+  real end-to-end scoping (`StatuteRepository`/`GraphService`/`VectorIndex` all driven by the JWT's
+  `tenant_id` claim — see "Multi-tenant data isolation" below), not just a token check. Liability
+  disclaimer: a one-time, per-tenant, cryptographically-logged acceptance (see "Liability
+  disclaimer & consent" below), not a per-request header or client-side modal — both rejected as
+  security theater (client-controlled, no enforcement teeth, easy to characterize as manufactured
+  compliance rather than genuine consent) before building what's here instead.
+- **v1.2.1** — an $L_1$-sparse alternative to `refactoring/`'s minimum-norm loophole correction. One
+  deliberately narrow slice of a much larger proposed roadmap (neuro-symbolic LLM ingestion, modal
+  deontic/temporal/epistemic logic, MARL, ZK-SNARKs, HSM signing, Kubernetes autoscaling) assessed
+  and **not** pursued wholesale: several pillars would either compromise the EPR core's decidability
+  guarantee (modal logic's Kripke semantics generically need quantifier alternation outside the
+  `exists*-forall*` fragment `formal_logic/` has guaranteed since Phase 1) or need cloud
+  infrastructure this environment has no way to build *or verify*.
+- **v1.2.2** — `ConsentLedger` replaces the consent gate's O(n) full-WAL-scan with an O(1) indexed
+  projection, still exactly re-derivable from the WAL alone.
+- **v1.2.3** — `KeySigner` (`core/key_signer.py`) abstracts WAL signing behind `sign()`/`verify()`;
+  the existing Ed25519-file backend is the default, lazy-imported AWS KMS/HashiCorp Vault adapters
+  are real, dispatching alternatives, genuinely correct against the installed boto3/hvac packages'
+  actual API contracts (verified by introspection, not memory) but not exercised against a live AWS
+  account or Vault instance.
+- **v1.3.0** — `POST /auth/register`: real, self-service user/tenant registration (see "User
+  registration & login" below), closing "no user/tenant registration system to provision a second
+  real credential."
+- **v1.4.0** — token revocation and refresh-token rotation (`compliance/token_ledger.py`,
+  `POST /auth/refresh` + `POST /auth/revoke`), closing the two gaps v1.3.0 deliberately left open.
+
+None of this means "battle-tested production system" — read on for what would still take.
 
 ## What's built
 
@@ -128,8 +126,8 @@ system" — read on for what would still take.
   `kind`, and returns both the `ProofResult` and the rendered SMT-LIB2 text), `/simulation/penalty`
   and `/simulation/trembling-hand`, `/refactoring/detect-loopholes` + `/refactoring/sparse-patch`, `/graph/statutes` +
   `/graph/preemption/{entity_id}` + `/graph/search`, `/ingestion/jobs`, `/auth/token` +
-  `/auth/register` (see "User registration & login" below), and `/legal/disclaimer` +
-  `/legal/accept` (see "Liability disclaimer & consent" below).
+  `/auth/register` + `/auth/refresh` + `/auth/revoke` (see "User accounts, tokens & revocation"
+  below), and `/legal/disclaimer` + `/legal/accept` (see "Liability disclaimer & consent" below).
   Every route depends on the knowledge_graph Protocol interfaces rather than concrete classes;
   which concrete class each resolves to is decided by `knowledge_graph/factory.py`, itself driven
   by `core.config.settings` (`graph_backend`/`vector_backend`/`embedding_backend`) — swapping in
@@ -200,25 +198,23 @@ resolve in `/graph/preemption/{entity_id}`, and never surfaces in `/graph/search
 tenant's token.
 
 **What this still isn't**: as of v1.3.0 there *is* a real registration path (`POST /auth/register`
-— see "User registration & login" below) provisioning genuine, independent tenants — this section's
+— see "User accounts, tokens & revocation" below) provisioning genuine, independent tenants — this section's
 isolation guarantee is no longer only exercised via directly-minted tokens standing in for a second
 registered client, `tests/integration/test_registration_flow.py` proves it through real registration
 end-to-end. What's still missing: inviting a *second* user into a tenant that already has one (every
 tenant has exactly one user for now), and any notion of roles/permissions within a tenant.
 
-### User registration & login
+### User accounts, tokens & revocation
 
-Added in v1.3.0, closing the "no way to provision a real second tenant/credential pair" gap the
-previous section used to flag. Self-service, not admin-gated: `POST /auth/register` requires no
-existing credential, matching how most SaaS trial signup works.
+**Registration & login**, added in v1.3.0, closing the "no way to provision a real second
+tenant/credential pair" gap the previous section used to flag. Self-service, not admin-gated:
+`POST /auth/register` requires no existing credential, matching how most SaaS trial signup works.
 
 - **`POST /auth/register`** — `{email, password}`. Always provisions a *brand-new* tenant (a
   generated `tenant_id`) plus its first `UserAccount` — this is "start your own workspace," not
   "join an existing one." Rejects a duplicate email with 409, an obviously-malformed email or a
   password under 8 characters with 422. Returns the new `tenant_id` plus an access+refresh token
-  pair immediately (standard "logged in right after signup" UX) — the refresh token isn't
-  redeemable yet (`POST /auth/refresh` is a v1.3.x follow-up; see Known limitations), only recorded
-  for that endpoint to check against once it exists.
+  pair immediately (standard "logged in right after signup" UX).
 - **`POST /auth/token`** — kept backward-compatible: the demo credential
   (`settings.api_client_id`/`api_client_secret`) still works unconditionally, so zero-config local
   dev and every pre-existing test stay unaffected. It now *also* checks the real user registry —
@@ -235,16 +231,44 @@ existing credential, matching how most SaaS trial signup works.
 - **`api/security.py`**'s `hash_password`/`verify_password` — `hashlib.pbkdf2_hmac` (600,000
   iterations, OWASP's current minimum, a random salt per password, constant-time comparison via
   `hmac.compare_digest`), the same "correct use of a standard-library primitive" philosophy this
-  file already applies to its hand-rolled HS256 JWT signing. Every issued token also now carries a
-  `jti` (unique per token) and a `token_type` claim, unused by anything yet in v1.3.0 — added now so
-  the token shape doesn't need a second breaking change once revocation/refresh redemption
-  (`compliance/token_ledger.py`) lands.
+  file already applies to its hand-rolled HS256 JWT signing.
 
-`tests/integration/test_registration_flow.py` proves this end-to-end: a registered account's token
-works on a protected route, a duplicate email is rejected, a registered user logs in via the same
-`/auth/token` the demo credential uses, two separate registrations get two tenants fully isolated
-from each other (reusing the exact guarantee "Multi-tenant data isolation" above proves for
-directly-minted tokens — this proves it holds for tokens obtained the real way).
+**Token revocation & refresh rotation**, added in v1.4.0, closing the two gaps the registration work
+deliberately left open. Every issued token carries a `jti` (unique per token — `sub` alone only
+identifies the *user*, not which specific token to revoke) and a `token_type` claim.
+
+- **`compliance/token_ledger.py`**'s `TokenLedger` — the same WAL-backed-projection pattern
+  `ConsentLedger` already proved out: the WAL is the sole source of truth, this is an O(1) index
+  over it (`is_revoked(jti)`, `redeem_refresh_token(jti)`), exactly re-derivable by replaying
+  `wal.entries()` from scratch (`tests/unit/test_token_ledger.py::TestTokenLedgerReplay` proves it,
+  same shape as `ConsentLedger`'s own replay test). No separate "was this jti ever issued" tracking
+  — the JWT signature itself is that proof; nothing downstream needs to query it.
+- **`POST /auth/refresh`** — `{refresh_token}`. Redeems a still-valid, not-yet-used refresh token
+  for a new access+refresh pair (rotation: the old refresh token is spent the instant it's used). A
+  *second* attempt to redeem the same refresh token — reuse, a real theft signal — fails closed
+  (401) rather than silently succeeding again. An access token presented here, or a refresh token
+  presented as a regular bearer token elsewhere, is rejected either way (`token_type` is checked in
+  both directions).
+- **`POST /auth/revoke`** — `{token}`. Possession of the token (access *or* refresh) is the
+  authorization to revoke it — matches ordinary "logout" semantics, no separate auth check needed.
+  A revoked access token is rejected immediately on its very next use, not just once it naturally
+  expires (`api/dependencies.py`'s `_decode_bearer_token`, shared by `require_auth`/
+  `get_current_tenant`, checks `TokenLedger.is_revoked` on every request when auth is enabled).
+
+`tests/integration/test_registration_flow.py` proves registration end-to-end: a registered
+account's token works on a protected route, a duplicate email is rejected, a registered user logs
+in via the same `/auth/token` the demo credential uses, two separate registrations get two tenants
+fully isolated from each other (reusing the exact guarantee "Multi-tenant data isolation" above
+proves for directly-minted tokens — this proves it holds for tokens obtained the real way).
+`tests/integration/test_token_lifecycle.py` proves revocation and rotation end-to-end: refresh
+issues a working new access token, reusing the spent refresh token is rejected, revoking a token
+makes it stop working on its very next request, and none of this leaks across two different users'
+tokens.
+
+**What this still isn't**: refresh-token reuse fails closed for *that* token, but doesn't cascade to
+revoke every other outstanding token for the same user — a real session-wide "this looks like theft"
+response is real added scope not built here. There's still no inviting a second user into an
+existing tenant, no roles/permissions, no password reset or email verification flow.
 
 ### Liability disclaimer & consent
 
@@ -435,17 +459,15 @@ Read this before treating any of the above as more finished than it is:
   executed yet as of this commit (it will on the next push). Treat "the UI has real, cross-browser-
   configured behavioral test coverage, and it already found and fixed one bug" as established;
   treat "this has run in CI, repeatedly, over time" as not yet true.
-- **Registration is now real; token lifecycle management still isn't.** As of v1.2.0,
-  `StatuteRepository`/`GraphService`/`VectorIndex` are genuinely tenant-scoped end to end (see
-  "Multi-tenant data isolation" above); as of v1.3.0, `POST /auth/register` provisions genuine,
-  independent tenant/credential pairs (see "User registration & login" above) — both real, not
-  aspirational. What's still missing: no token revocation (a stolen or leaked access token is valid
-  until it naturally expires — `settings.jwt_expires_minutes`, one hour by default — nothing can
-  invalidate it early), no way to actually redeem the refresh tokens `/auth/register`/`/auth/token`
-  already issue (there's no `POST /auth/refresh` yet), no inviting a second user into an existing
-  tenant, no roles/permissions. Revocation and refresh-token redemption are the planned next piece
-  (`compliance/token_ledger.py`, following the exact same WAL-backed-projection pattern
-  `ConsentLedger` already proves out above) — not built yet as of this version.
+- **Registration, revocation, and refresh rotation are all real now; account management still
+  isn't.** As of v1.2.0, `StatuteRepository`/`GraphService`/`VectorIndex` are genuinely tenant-scoped
+  end to end; as of v1.3.0, `POST /auth/register` provisions genuine, independent tenant/credential
+  pairs; as of v1.4.0, a leaked or stolen access token can actually be revoked (not just wait out its
+  `settings.jwt_expires_minutes` expiry), and refresh tokens are genuinely redeemable, single-use,
+  rotating (see "User accounts, tokens & revocation" above for all three) — none of that
+  aspirational. What's still missing: refresh-token reuse fails closed for *that* token but doesn't
+  cascade to revoke a whole session, no inviting a second user into an existing tenant, no
+  roles/permissions, no password reset or email verification flow.
 - **The liability-disclaimer consent record is real (tamper-evident, tied to a server-verified
   token subject, tenant-scoped, and — since `ConsentLedger` — an O(1) indexed lookup rather than a
   WAL scan) but its supporting infrastructure is still minimal.** The WAL's signing key is a
