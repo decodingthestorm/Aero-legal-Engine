@@ -27,6 +27,16 @@ def _register(client: TestClient, email: str) -> dict:
     return response.json()
 
 
+def _login(client: TestClient, email: str, password: str = "correct horse battery") -> dict:
+    response = client.post("/auth/token", json={"client_id": email, "client_secret": password})
+    assert response.status_code == 200
+    return response.json()
+
+
+def _protected_request(client: TestClient, access_token: str):
+    return client.get("/graph/statutes", headers={"Authorization": f"Bearer {access_token}"})
+
+
 class TestPasswordReset:
     def test_request_reset_for_a_registered_email_returns_a_token(self, client):
         _register(client, "alice@example.com")
@@ -87,6 +97,38 @@ class TestPasswordReset:
             json={"reset_token": tokens["access_token"], "new_password": "new password here"},
         )
         assert response.status_code == 401
+
+    def test_reset_revokes_every_other_active_session_not_just_the_reset_token(self, client):
+        """The actual point of TokenLedger.revoke_all_sessions_for_subject:
+        a password reset is exactly the "assume this account may be
+        compromised" moment a session-wide invalidation exists for."""
+        registration_session = _register(client, "ivy@example.com")
+        second_session = _login(client, "ivy@example.com")
+        assert _protected_request(client, registration_session["access_token"]).status_code == 200
+        assert _protected_request(client, second_session["access_token"]).status_code == 200
+
+        reset_token = client.post(
+            "/auth/request-password-reset", json={"email": "ivy@example.com"}
+        ).json()["reset_token"]
+        client.post(
+            "/auth/reset-password", json={"reset_token": reset_token, "new_password": "new password here"}
+        )
+
+        assert _protected_request(client, registration_session["access_token"]).status_code == 401
+        assert _protected_request(client, second_session["access_token"]).status_code == 401
+
+    def test_reset_does_not_affect_a_different_users_session(self, client):
+        _register(client, "jack@example.com")
+        other_tokens = _register(client, "kelly@example.com")
+
+        reset_token = client.post(
+            "/auth/request-password-reset", json={"email": "jack@example.com"}
+        ).json()["reset_token"]
+        client.post(
+            "/auth/reset-password", json={"reset_token": reset_token, "new_password": "new password here"}
+        )
+
+        assert _protected_request(client, other_tokens["access_token"]).status_code == 200
 
 
 class TestEmailVerification:

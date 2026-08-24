@@ -26,7 +26,15 @@ not just the one reused refresh token.
 There's no "was this jti ever legitimately issued" tracking here — the
 JWT signature itself is that proof (only the server's secret key could
 have produced a valid one), so recording issuance separately would be
-bookkeeping nothing downstream ever needs to query.
+bookkeeping nothing downstream ever needs to query — with one exception:
+``record_session_started``/``revoke_all_sessions_for_subject`` *do* track
+which ``family_id``s exist for a given subject, specifically so a
+password reset (or a member being removed from a tenant — see
+api/routes/auth.py) can kill *every* active session for that person, not
+just whichever single token happens to be presented. That's a genuinely
+different query ("all of this subject's sessions") than "is this one jti
+valid," which is why it needed its own index rather than falling out of
+the existing ones.
 """
 
 from __future__ import annotations
@@ -37,6 +45,7 @@ from legal_engine.core.wal import WriteAheadLog
 _REVOKED_EVENT_TYPE = "token_revoked"
 _REDEEMED_EVENT_TYPE = "refresh_token_redeemed"
 _FAMILY_REVOKED_EVENT_TYPE = "token_family_revoked"
+_SESSION_STARTED_EVENT_TYPE = "session_started"
 
 
 class TokenLedger:
@@ -45,6 +54,7 @@ class TokenLedger:
         self._revoked_jtis: set[str] = set()
         self._redeemed_refresh_jtis: set[str] = set()
         self._revoked_families: set[str] = set()
+        self._families_by_subject: dict[str, set[str]] = {}
         for entry in wal.entries():
             self._index(entry)
 
@@ -53,6 +63,13 @@ class TokenLedger:
             family_id = entry.payload.get("family_id")
             if family_id:
                 self._revoked_families.add(family_id)
+            return
+
+        if entry.event_type == _SESSION_STARTED_EVENT_TYPE:
+            subject = entry.payload.get("subject")
+            family_id = entry.payload.get("family_id")
+            if subject and family_id:
+                self._families_by_subject.setdefault(subject, set()).add(family_id)
             return
 
         jti = entry.payload.get("jti")
@@ -84,6 +101,26 @@ class TokenLedger:
 
     def is_family_revoked(self, family_id: str) -> bool:
         return family_id in self._revoked_families
+
+    def record_session_started(self, subject: str, tenant_id: str, family_id: str) -> None:
+        """Called only when a *new* login session begins (api/routes/
+        auth.py's _issue_token_pair, when it's generating a fresh
+        family_id rather than continuing one via POST /auth/refresh) —
+        not on every token issued, since a refresh rotation is the same
+        session continuing, not a new one to separately track."""
+        entry = self._wal.append(
+            _SESSION_STARTED_EVENT_TYPE, {"subject": subject, "tenant_id": tenant_id, "family_id": family_id}
+        )
+        self._index(entry)
+
+    def revoke_all_sessions_for_subject(self, subject: str, tenant_id: str, reason: str = "") -> None:
+        """Revokes every session (family_id) on record for this subject —
+        used when a single-token revoke isn't enough: a password reset or
+        a member being removed from a tenant should kill every session
+        that subject is currently holding, not just whichever token
+        happened to be presented to trigger it."""
+        for family_id in self._families_by_subject.get(subject, set()):
+            self.revoke_family(family_id, tenant_id, reason=reason)
 
     def redeem_refresh_token(self, jti: str, tenant_id: str, family_id: str) -> bool:
         """Marks a refresh-token jti as redeemed (single-use rotation).

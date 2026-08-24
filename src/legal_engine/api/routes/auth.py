@@ -30,11 +30,11 @@ without a real inbox in this environment.
 POST /request-password-reset never reveals whether an email is
 registered (always 200s; the reset_token field is only present when the
 account actually exists) — a real anti-enumeration property, not an
-oversight. POST /reset-password does *not* retroactively invalidate
-other already-issued sessions for that user — a known, documented scope
-cut (see the README) — because sessions are tracked by family_id
-(compliance/token_ledger.py), not enumerated per-user, and building that
-enumeration is real added scope this doesn't take on.
+oversight. POST /reset-password *does* revoke every other active session
+for that user (compliance/token_ledger.py's
+revoke_all_sessions_for_subject) — a password reset is exactly the
+"assume this account may have been compromised" moment a session-wide
+invalidation exists for.
 
 POST /refresh redeems a still-valid, not-yet-used refresh token for a new
 access+refresh pair — single-use rotation (compliance/token_ledger.py):
@@ -69,6 +69,7 @@ from legal_engine.api.security import (
     hash_password,
     verify_password,
 )
+from legal_engine.compliance.token_ledger import TokenLedger
 from legal_engine.core.config import settings
 from legal_engine.core.models import UserAccount
 
@@ -86,15 +87,24 @@ def _validate_email_shape(value: str) -> str:
     return value.lower()
 
 
-def _issue_token_pair(subject: str, tenant_id: str, family_id: str | None = None) -> tuple[str, str]:
+def _issue_token_pair(
+    subject: str, tenant_id: str, token_ledger: TokenLedger, family_id: str | None = None
+) -> tuple[str, str]:
     """A fresh login (POST /auth/register, /auth/token) calls this with no
-    family_id — a new session, new family. POST /auth/refresh calls it
-    with the *old* refresh token's family_id, so the rotated pair stays
-    in the same family (see compliance/token_ledger.py for why that's
-    what lets a reuse-detected rotation cascade-revoke the sibling access
-    token too, not just the reused refresh token)."""
+    family_id — a new session, new family, recorded via
+    token_ledger.record_session_started so a later password reset (or a
+    member being removed from a tenant) can find and revoke it along with
+    every other session that subject holds. POST /auth/refresh calls it
+    with the *old* refresh token's family_id instead — the rotated pair
+    stays in the *same* session/family (also what lets a reuse-detected
+    rotation cascade-revoke the sibling access token, not just the reused
+    refresh token) — and does NOT record a new session, since it's the
+    same one continuing, not a new one to separately track."""
+    is_new_session = family_id is None
     if family_id is None:
         family_id = str(uuid4())
+    if is_new_session:
+        token_ledger.record_session_started(subject, tenant_id, family_id)
     access_token = create_token(subject=subject, tenant_id=tenant_id, family_id=family_id)
     refresh_token = create_token(
         subject=subject,
@@ -201,7 +211,10 @@ class RevokeResponse(BaseModel):
 
 @router.post("/register", response_model=RegisterResponse)
 async def register(
-    request: RegisterRequest, user_repository: UserRepositoryDep, email_sender: EmailSenderDep
+    request: RegisterRequest,
+    user_repository: UserRepositoryDep,
+    email_sender: EmailSenderDep,
+    token_ledger: TokenLedgerDep,
 ) -> RegisterResponse:
     if await user_repository.get_by_email(request.email) is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
@@ -224,7 +237,7 @@ async def register(
         body=f"Welcome! Verify your email with this token: {verify_token}",
     )
 
-    access_token, refresh_token = _issue_token_pair(user.email, tenant_id)
+    access_token, refresh_token = _issue_token_pair(user.email, tenant_id, token_ledger)
     return RegisterResponse(
         verify_token=verify_token,
         tenant_id=tenant_id,
@@ -303,7 +316,7 @@ async def accept_invite(
     # invite token is functionally identical to a revoked one.
     token_ledger.revoke(jti, tenant_id, reason="invite accepted")
 
-    access_token, refresh_token = _issue_token_pair(user.email, tenant_id)
+    access_token, refresh_token = _issue_token_pair(user.email, tenant_id, token_ledger)
     return AcceptInviteResponse(
         tenant_id=tenant_id,
         access_token=access_token,
@@ -313,7 +326,9 @@ async def accept_invite(
 
 
 @router.post("/token", response_model=TokenResponse)
-async def issue_token(request: TokenRequest, user_repository: UserRepositoryDep) -> TokenResponse:
+async def issue_token(
+    request: TokenRequest, user_repository: UserRepositoryDep, token_ledger: TokenLedgerDep
+) -> TokenResponse:
     if request.client_id == settings.api_client_id and request.client_secret == settings.api_client_secret:
         subject, tenant_id = settings.api_client_id, settings.api_client_tenant_id
     else:
@@ -322,7 +337,7 @@ async def issue_token(request: TokenRequest, user_repository: UserRepositoryDep)
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid client credentials")
         subject, tenant_id = user.email, user.tenant_id
 
-    access_token, refresh_token = _issue_token_pair(subject, tenant_id)
+    access_token, refresh_token = _issue_token_pair(subject, tenant_id, token_ledger)
     return TokenResponse(
         access_token=access_token, refresh_token=refresh_token, expires_in_minutes=settings.jwt_expires_minutes
     )
@@ -348,7 +363,7 @@ async def refresh(request: RefreshRequest, token_ledger: TokenLedgerDep) -> Toke
             detail="Refresh token has already been used or revoked",
         )
 
-    access_token, new_refresh_token = _issue_token_pair(subject, tenant_id, family_id=family_id)
+    access_token, new_refresh_token = _issue_token_pair(subject, tenant_id, token_ledger, family_id=family_id)
     return TokenResponse(
         access_token=access_token, refresh_token=new_refresh_token, expires_in_minutes=settings.jwt_expires_minutes
     )
@@ -418,6 +433,11 @@ async def reset_password(
     await user_repository.add(updated)
     # Single-use, same reused mechanism as invite/accept-invite.
     token_ledger.revoke(jti, user.tenant_id, reason="password reset")
+    # A password reset is exactly the "assume this account may have been
+    # compromised" moment a session-wide invalidation exists for — every
+    # other active session for this user is killed too, not just the
+    # reset token itself.
+    token_ledger.revoke_all_sessions_for_subject(email, user.tenant_id, reason="password reset")
     return ResetPasswordResponse(reset=True)
 
 

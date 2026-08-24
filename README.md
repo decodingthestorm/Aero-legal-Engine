@@ -45,9 +45,13 @@ honestly-flagged gap from the version before it — never a rewrite, always addi
 - **v1.6.0** — `core/email_sender.py`'s `EmailSender` (`LoggingEmailSender` default,
   `SmtpEmailSender` real dispatch, stdlib-only, no install extra) plus `POST
   /auth/request-password-reset` + `POST /auth/reset-password` + `POST /auth/verify-email`, closing
-  the last two gaps: "no password reset" and "no email verification flow." The final Known
-  Limitations bullet this whole thread traces back to is now empty of the four items it originally
-  named.
+  the last two gaps: "no password reset" and "no email verification flow." The Known Limitations
+  bullet this whole thread traces back to is now empty of the four items it originally named — the
+  smaller sub-gaps that closing them surfaced (session-wide reset invalidation, tenant member
+  management) are what the next two versions close.
+- **v1.6.1** — `TokenLedger.revoke_all_sessions_for_subject`: `POST /auth/reset-password` now kills
+  *every* active session for that user, not just the one reset token — the "assume this account may
+  be compromised" property a password reset is supposed to have.
 
 None of this means "battle-tested production system" — read on for what would still take.
 
@@ -340,10 +344,13 @@ directly testable and usable without a real inbox, the same reasoning invites al
   email is registered (`reset_token` is only present in the response when the account actually
   exists) — a real anti-enumeration property, not an oversight.
 - **`POST /auth/reset-password`** — `{reset_token, new_password}`. Single-use (same `TokenLedger.
-  revoke` reuse as invite tokens). Does **not** retroactively invalidate other already-issued
-  sessions for that user — a documented scope cut, not an oversight: sessions are tracked by
-  `family_id` (see refresh-token rotation above), not enumerated per-user, and building that
-  enumeration just for this is real added scope not taken on here.
+  revoke` reuse as invite tokens) and, since v1.6.1, revokes **every other active session** for that
+  user too (`TokenLedger.revoke_all_sessions_for_subject`) — a password reset is exactly the "assume
+  this account may have been compromised" moment a session-wide invalidation exists for, not just
+  the one reset token. This needed a new index `TokenLedger` didn't have before: `record_session_
+  started` tracks which `family_id`s belong to which subject (only on a fresh login — a
+  `/auth/refresh` rotation continues the same session, not a new one to track), so
+  `revoke_all_sessions_for_subject` has something real to revoke.
 - **`POST /auth/verify-email`** — `{verify_token}` (issued alongside every token pair at `POST
   /auth/register`). Sets `UserAccount.email_verified`. Not single-use via `TokenLedger` the way
   invite/reset tokens are — verifying an already-verified email twice with the same token is a
@@ -355,12 +362,13 @@ directly testable and usable without a real inbox, the same reasoning invites al
 reset for an unregistered email still 200s with no token (the enumeration check); a reset actually
 changes the password (the old one is rejected at `/auth/token`, the new one works); reusing a reset
 token twice is rejected; registration's verify token flips `email_verified` and a second use is a
-harmless no-op.
+harmless no-op; **logging in twice (two independent sessions), then resetting the password, rejects
+both old access tokens immediately** — not just the reset token — and never touches a different
+user's session.
 
 **What this still isn't**: `SmtpEmailSender` is real, dispatching code, unverified against a live
-mail server; password reset doesn't cascade-invalidate other active sessions; `email_verified` is
-tracked but not enforced anywhere; there's still no way to change a role, remove a member, or list
-who's in a tenant.
+mail server; `email_verified` is tracked but not enforced anywhere; there's still no way to change a
+role, remove a member, or list who's in a tenant.
 
 ### Liability disclaimer & consent
 
@@ -560,11 +568,12 @@ Read this before treating any of the above as more finished than it is:
   session, not just that one token; as of v1.5.0, an owner can invite a real second user into their
   *existing* tenant, with a real (if minimal) role distinction gating who's allowed to; as of
   v1.6.0, password reset and email verification are real, working flows, sent through a real
-  (if here-unverified) `EmailSender` (see "User accounts, tokens & revocation" above for all six) —
-  none of that aspirational. What's still missing, smaller in scope than what's been closed: no way
-  to change a role or remove a member after the fact, no listing who's in a tenant, password reset
-  doesn't cascade-invalidate other active sessions, `email_verified` is tracked but not enforced
-  anywhere, and `SmtpEmailSender` has never been exercised against a real mail server.
+  (if here-unverified) `EmailSender`; as of v1.6.1, a password reset kills every other active
+  session for that user, not just the reset token itself (see "User accounts, tokens & revocation"
+  above for all seven) — none of that aspirational. What's still missing, smaller in scope than
+  what's been closed: no way to change a role or remove a member after the fact, no listing who's in
+  a tenant, `email_verified` is tracked but not enforced anywhere, and `SmtpEmailSender` has never
+  been exercised against a real mail server.
 - **The liability-disclaimer consent record is real (tamper-evident, tied to a server-verified
   token subject, tenant-scoped, and — since `ConsentLedger` — an O(1) indexed lookup rather than a
   WAL scan) but its supporting infrastructure is still minimal.** The WAL's signing key is a

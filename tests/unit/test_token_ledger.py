@@ -9,6 +9,8 @@ TENANT_A = "tenant-a"
 TENANT_B = "tenant-b"
 FAMILY_A = "family-a"
 FAMILY_B = "family-b"
+SUBJECT_A = "alice@example.com"
+SUBJECT_B = "bob@example.com"
 
 
 @pytest.fixture
@@ -105,6 +107,44 @@ class TestFamilyRevocationOnReuse:
             wal.verify()
 
 
+class TestSessionTrackingAndCascadeRevocation:
+    """record_session_started / revoke_all_sessions_for_subject: the
+    mechanism a password reset (or removing a member from a tenant) uses
+    to kill *every* session a subject holds, not just one token at a
+    time."""
+
+    def test_subject_with_no_sessions_has_nothing_to_revoke(self, ledger):
+        ledger.revoke_all_sessions_for_subject(SUBJECT_A, TENANT_A)  # should not raise
+        assert ledger.is_family_revoked(FAMILY_A) is False
+
+    def test_revoking_kills_the_tracked_session(self, ledger):
+        ledger.record_session_started(SUBJECT_A, TENANT_A, FAMILY_A)
+        ledger.revoke_all_sessions_for_subject(SUBJECT_A, TENANT_A)
+        assert ledger.is_family_revoked(FAMILY_A) is True
+
+    def test_revoking_kills_every_tracked_session_for_that_subject(self, ledger):
+        ledger.record_session_started(SUBJECT_A, TENANT_A, FAMILY_A)
+        ledger.record_session_started(SUBJECT_A, TENANT_A, FAMILY_B)
+        ledger.revoke_all_sessions_for_subject(SUBJECT_A, TENANT_A)
+        assert ledger.is_family_revoked(FAMILY_A) is True
+        assert ledger.is_family_revoked(FAMILY_B) is True
+
+    def test_revoking_one_subjects_sessions_does_not_touch_anothers(self, ledger):
+        ledger.record_session_started(SUBJECT_A, TENANT_A, FAMILY_A)
+        ledger.record_session_started(SUBJECT_B, TENANT_A, FAMILY_B)
+        ledger.revoke_all_sessions_for_subject(SUBJECT_A, TENANT_A)
+        assert ledger.is_family_revoked(FAMILY_A) is True
+        assert ledger.is_family_revoked(FAMILY_B) is False
+
+    def test_session_start_is_tamper_evident(self, wal, ledger):
+        ledger.record_session_started(SUBJECT_A, TENANT_A, FAMILY_A)
+        wal.verify()  # should not raise
+
+        wal.entries()[0].payload["family_id"] = FAMILY_B  # forge onto a different family
+        with pytest.raises(WALIntegrityError, match="payload_hash"):
+            wal.verify()
+
+
 class TestTokenLedgerReplay:
     """Same property compliance/consent.py's TestConsentLedgerReplay
     proves for ConsentLedger: the index must be exactly re-derivable from
@@ -144,3 +184,14 @@ class TestTokenLedgerReplay:
         replayed = TokenLedger(wal)
         assert replayed.is_revoked("jti-a") is True
         assert replayed.redeem_refresh_token("refresh-jti-b", TENANT_B, FAMILY_B) is False
+
+    def test_replay_reconstructs_tracked_sessions(self):
+        wal = WriteAheadLog(generate_signing_key())
+        original = TokenLedger(wal)
+        original.record_session_started(SUBJECT_A, TENANT_A, FAMILY_A)
+        original.record_session_started(SUBJECT_A, TENANT_A, FAMILY_B)
+
+        replayed = TokenLedger(wal)
+        replayed.revoke_all_sessions_for_subject(SUBJECT_A, TENANT_A)
+        assert replayed.is_family_revoked(FAMILY_A) is True
+        assert replayed.is_family_revoked(FAMILY_B) is True
