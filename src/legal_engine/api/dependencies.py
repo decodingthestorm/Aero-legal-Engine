@@ -1,13 +1,11 @@
 """Dependency injection for the API layer.
 
-There is still no Postgres-backed persistence — this is an in-process demo
-API, not a production gateway. What *is* real: every route depends on the
-Protocol interfaces (GraphService, VectorIndex, Embedder — see
-knowledge_graph/) rather than a concrete class, so which backend main.py's
-lifespan actually constructs is a settings change
-(knowledge_graph/factory.py), not a route change; and ``require_auth``
-below is a real, working (if deliberately simple) JWT check, off by default
-via settings.api_auth_enabled.
+Every route depends on the Protocol interfaces (GraphService, VectorIndex,
+Embedder, StatuteRepository) rather than a concrete class, so which backend
+main.py's lifespan actually constructs is a settings change
+(knowledge_graph/factory.py, persistence/factory.py), not a route change;
+and ``require_auth`` below is a real, working (if deliberately simple) JWT
+check, off by default via settings.api_auth_enabled.
 """
 
 from __future__ import annotations
@@ -23,6 +21,7 @@ from legal_engine.ingestion.rate_limiter import PoliteFetcher
 from legal_engine.knowledge_graph.embeddings import Embedder
 from legal_engine.knowledge_graph.graph_service import GraphService
 from legal_engine.knowledge_graph.vector_service import VectorIndex
+from legal_engine.persistence.repository import StatuteRepository
 
 
 def get_graph_service(request: Request) -> GraphService:
@@ -43,6 +42,10 @@ def get_solver_pool(request: Request) -> SolverPool:
 
 def get_fetcher(request: Request) -> PoliteFetcher:
     return request.app.state.fetcher
+
+
+def get_statute_repository(request: Request) -> StatuteRepository:
+    return request.app.state.statute_repository
 
 
 async def require_auth(request: Request) -> str | None:
@@ -68,3 +71,4 @@ VectorIndexDep = Annotated[VectorIndex, Depends(get_vector_index)]
 EmbedderDep = Annotated[Embedder, Depends(get_embedder)]
 SolverPoolDep = Annotated[SolverPool, Depends(get_solver_pool)]
 FetcherDep = Annotated[PoliteFetcher, Depends(get_fetcher)]
+StatuteRepositoryDep = Annotated[StatuteRepository, Depends(get_statute_repository)]

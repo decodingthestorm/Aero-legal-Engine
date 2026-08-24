@@ -1,5 +1,4 @@
 # Distributed Celery worker container.
-# Note: workers/tasks.py is not implemented yet (Phase 4).
 FROM python:3.11-slim AS base
 
 WORKDIR /app
@@ -7,6 +6,8 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
 
-RUN pip install --no-cache-dir .
+# workers extra: celery/redis. Add ",postgres" too if a task ever needs the
+# SQL statute repository directly rather than going through the API.
+RUN pip install --no-cache-dir ".[workers]"
 
 CMD ["celery", "-A", "legal_engine.workers.celery_app", "worker", "--loglevel=info"]

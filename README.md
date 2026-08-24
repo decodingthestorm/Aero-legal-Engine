@@ -68,8 +68,20 @@ system" — see [Known limitations](#known-limitations) for what that would stil
   Auth is a real (if deliberately simple — a dependency-free HS256 JWT implementation rather than
   pulling in PyJWT for a few dozen lines) bearer-token check, off by default via
   `settings.api_auth_enabled` so it doesn't get in the way of local development or most of the
-  test suite. There's still no Postgres-backed persistence — this is an in-process demo gateway,
-  not a hardened production one; see Known limitations.
+  test suite.
+- **`persistence/`** — the durable, queryable system-of-record for ingested statutes, separate
+  from the graph/vector *indexes* above (which are rebuildable from this). `StatuteRepository` is
+  in-memory by default; `settings.statute_backend = "sql"` switches to `SqlAlchemyStatuteRepository`
+  (`sql_repository.py`), which works against any SQLAlchemy-async DSN — `postgresql+asyncpg://` in
+  production (`docker-compose.yml` runs Postgres; the `postgres` install extra pulls in
+  `sqlalchemy`+`asyncpg`), `sqlite+aiosqlite://` in this codebase's own test suite, since there's no
+  Postgres available to test against for real in the environment this was built in.
+  `tests/integration/test_statute_persistence.py` proves durability through the real API lifespan
+  (add a statute, tear the app down, bring a fresh instance up pointed at the same SQLite file, read
+  it back), and `tests/integration/test_postgres_repository.py` runs the same repository against a
+  genuine Postgres — skipped locally, but for real under CI's `postgres` job (a real
+  `services: postgres:` container), the same "can't verify locally, so make CI do it for real"
+  pattern the `ui` job uses for the dashboard.
 - **`ui/`** — a Next.js (Pages Router, TypeScript, Tailwind) dashboard: `ProofInspector` (submit a
   clause, see the `ProofResult` and its SMT-LIB2 rendering), `SimulationCard` (deterrence-penalty
   calculator plus an SVG-rendered convex penalty curve), and `GraphViewer` (add a statute, resolve
@@ -108,10 +120,13 @@ Read this before treating any of the above as more finished than it is:
   regression protection against a future change breaking something that manual pass happened to
   check. CI's `ui` job (`npm install && npm run build`) still only proves it compiles, not that it
   behaves correctly — that's what the manual pass added, once, for the paths above.
-- **No Postgres-backed persistence.** `core/config.py` has a `postgres_dsn` setting and
-  `docker-compose.yml` runs a Postgres container, but nothing reads or writes to it — all state
-  (the knowledge graph, the vector index) lives in the API process's memory and is lost on
-  restart, unless you configure the Neo4j/Qdrant backends via `knowledge_graph/factory.py`.
+- **The graph/vector indexes still don't persist, even with `statute_backend = "sql"`.**
+  `persistence/` gives you a durable record of every statute ingested — but `graph_backend` and
+  `vector_backend` are separate settings that still default to in-memory, and switching them to
+  Neo4j/Qdrant is what actually makes preemption resolution and semantic search survive a restart
+  too. Nothing currently rebuilds the graph/vector indexes from the statute repository on startup
+  if you mix a persistent statute backend with in-memory indexes — that gap (an explicit
+  reindex-on-startup step) hasn't been closed.
 - **Auth is deliberately minimal.** One hardcoded client_id/client_secret pair
   (`settings.api_client_id`/`api_client_secret`), no user/tenant model, no token revocation, no
   refresh tokens. Fine for a demo gateway; not what you'd want fronting anything real.
@@ -131,6 +146,11 @@ python -m venv .venv
 pip install -e ".[dev,api,workers]"   # api/workers extras needed for the full test suite
 pytest
 ```
+
+`tests/integration/test_postgres_repository.py` skips itself unless `LEGAL_ENGINE_TEST_POSTGRES_DSN`
+is set (and needs the `postgres` extra installed) — it's what CI's `postgres` job runs against a
+real Postgres service container; there's nothing to configure for the rest of the suite, which
+tests the same repository against SQLite instead.
 
 For the UI (requires Node.js 20+; needs the API running separately, see above):
 

@@ -213,6 +213,74 @@ class TestGraphRoutes:
         assert response.status_code == 200
         assert any(m["citation"] == "Sec. 99" for m in response.json())
 
+    def test_added_statute_is_persisted_and_fetchable_by_id(self, client):
+        add_resp = client.post(
+            "/graph/statutes",
+            json={
+                "source_type": "municipal_code",
+                "jurisdiction_tier": 4,
+                "citation": "Sec. 42",
+                "title": "Persisted Ordinance",
+                "text": "persisted text",
+                "applies_to": ["entity-persist"],
+            },
+        )
+        statute_id = add_resp.json()["id"]
+
+        get_resp = client.get(f"/graph/statutes/{statute_id}")
+        assert get_resp.status_code == 200
+        assert get_resp.json()["citation"] == "Sec. 42"
+        assert get_resp.json()["text"] == "persisted text"
+
+    def test_get_missing_statute_returns_404(self, client):
+        response = client.get("/graph/statutes/00000000-0000-0000-0000-000000000000")
+        assert response.status_code == 404
+
+    def test_list_statutes_filters_by_citation(self, client):
+        client.post(
+            "/graph/statutes",
+            json={
+                "source_type": "municipal_code",
+                "jurisdiction_tier": 4,
+                "citation": "Sec. List A",
+                "title": "A",
+                "text": "text a",
+                "applies_to": ["entity-list"],
+            },
+        )
+        client.post(
+            "/graph/statutes",
+            json={
+                "source_type": "municipal_code",
+                "jurisdiction_tier": 4,
+                "citation": "Sec. List B",
+                "title": "B",
+                "text": "text b",
+                "applies_to": ["entity-list"],
+            },
+        )
+
+        response = client.get("/graph/statutes", params={"citation": "Sec. List A"})
+        assert response.status_code == 200
+        citations = [s["citation"] for s in response.json()]
+        assert citations == ["Sec. List A"]
+
+    def test_list_statutes_without_filter_returns_all(self, client):
+        client.post(
+            "/graph/statutes",
+            json={
+                "source_type": "municipal_code",
+                "jurisdiction_tier": 4,
+                "citation": "Sec. All 1",
+                "title": "A",
+                "text": "text",
+                "applies_to": ["entity-all"],
+            },
+        )
+        response = client.get("/graph/statutes")
+        assert response.status_code == 200
+        assert any(s["citation"] == "Sec. All 1" for s in response.json())
+
 
 class TestIngestionRoute:
     def test_run_ingestion_job_with_mocked_fetcher(self, client):

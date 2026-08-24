@@ -32,6 +32,47 @@ jobs:
       - name: Property tests
         run: pytest tests/property -v
 
+  postgres:
+    runs-on: ubuntu-latest
+    # persistence/sql_repository.py is tested against SQLite in the `test`
+    # job above (tests/unit/test_sql_repository.py — there's no Postgres
+    # available in the environment this was developed in), which covers
+    # most of its behavior honestly but can't prove anything asyncpg- or
+    # Postgres-specific (UUID column mapping in particular). This job runs
+    # tests/integration/test_postgres_repository.py against a genuine
+    # Postgres service container — the actual verification that gap needs,
+    # even though it never runs locally.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: legal_engine
+          POSTGRES_PASSWORD: legal_engine
+          POSTGRES_DB: legal_engine_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev,postgres]"
+
+      - name: Postgres integration tests
+        env:
+          LEGAL_ENGINE_TEST_POSTGRES_DSN: postgresql+asyncpg://legal_engine:legal_engine@localhost:5432/legal_engine_test
+        run: pytest tests/integration/test_postgres_repository.py -v
+
   ui:
     runs-on: ubuntu-latest
     # ui/ has been manually verified once (npm install + npm run dev +

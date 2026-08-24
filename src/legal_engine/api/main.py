@@ -28,6 +28,7 @@ from legal_engine.knowledge_graph.factory import (
     build_graph_service,
     build_vector_index,
 )
+from legal_engine.persistence.factory import build_statute_repository
 
 
 @asynccontextmanager
@@ -42,10 +43,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         memory_limit_mb=settings.z3_memory_limit_mb,
     )
     app.state.fetcher = PoliteFetcher()
+    app.state.statute_repository = build_statute_repository()
+    await app.state.statute_repository.create_schema()
     try:
         yield
     finally:
         await app.state.fetcher.aclose()
+        await app.state.statute_repository.close()
 
 
 def create_app() -> FastAPI:

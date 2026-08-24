@@ -1,11 +1,26 @@
-"""Knowledge graph search & preemption endpoints."""
+"""Knowledge graph search & preemption endpoints.
+
+Adding a statute writes to three places: the graph (traversal/preemption),
+the vector index (semantic search), and the statute repository (durable
+system-of-record — see persistence/). The first two are in-memory indexes
+by default and lost on restart regardless of backend choice for *them*;
+the repository is what actually survives a restart when
+settings.statute_backend="sql" points it at Postgres.
+"""
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from uuid import UUID
+
+from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 
-from legal_engine.api.dependencies import EmbedderDep, GraphServiceDep, VectorIndexDep
+from legal_engine.api.dependencies import (
+    EmbedderDep,
+    GraphServiceDep,
+    StatuteRepositoryDep,
+    VectorIndexDep,
+)
 from legal_engine.core.models import JurisdictionTier, SourceType, StatuteDocument
 from legal_engine.knowledge_graph.preemption import resolve_preemption_for_entity
 
@@ -32,6 +47,7 @@ async def add_statute(
     graph_service: GraphServiceDep,
     vector_index: VectorIndexDep,
     embedder: EmbedderDep,
+    statute_repository: StatuteRepositoryDep,
 ) -> AddStatuteResponse:
     statute = StatuteDocument(
         source_type=request.source_type,
@@ -42,7 +58,25 @@ async def add_statute(
     )
     graph_service.add_statute(statute, applies_to=request.applies_to)
     vector_index.upsert(statute.id, embedder.embed(statute.text), {"citation": statute.citation})
+    await statute_repository.add(statute)
     return AddStatuteResponse(id=str(statute.id), citation=statute.citation)
+
+
+@router.get("/statutes/{statute_id}", response_model=StatuteDocument)
+async def get_statute(statute_id: UUID, statute_repository: StatuteRepositoryDep) -> StatuteDocument:
+    statute = await statute_repository.get(statute_id)
+    if statute is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Statute not found")
+    return statute
+
+
+@router.get("/statutes", response_model=list[StatuteDocument])
+async def list_statutes(
+    statute_repository: StatuteRepositoryDep, citation: str | None = None
+) -> list[StatuteDocument]:
+    if citation is not None:
+        return await statute_repository.list_by_citation(citation)
+    return await statute_repository.all()
 
 
 class PreemptionResponse(BaseModel):

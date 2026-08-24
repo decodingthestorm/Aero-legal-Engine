@@ -1,6 +1,4 @@
 # Production FastAPI gateway container.
-# Note: api/main.py is not implemented yet (Phase 4) — this Dockerfile builds
-# and installs the package now so the image is ready the moment it lands.
 FROM python:3.11-slim AS base
 
 WORKDIR /app
@@ -8,7 +6,10 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
 
-RUN pip install --no-cache-dir .
+# api extra: fastapi/uvicorn, the gateway itself.
+# postgres extra: only needed if deployed with LEGAL_ENGINE_STATUTE_BACKEND=sql
+# (default is in-memory, in which case these two packages are simply unused).
+RUN pip install --no-cache-dir ".[api,postgres]"
 
 EXPOSE 8000
 

@@ -42,6 +42,14 @@ class Settings(BaseSettings):
     vector_backend: Literal["in_memory", "qdrant"] = "in_memory"
     embedding_backend: Literal["hashing", "sentence_transformers"] = "hashing"
     qdrant_collection_name: str = "statutes"
+    # persistence/factory.py: the durable, queryable system-of-record for
+    # ingested statutes (separate from the graph/vector *indexes* above,
+    # which are rebuildable from this). "sql" works against any DSN
+    # SQLAlchemy's async engine supports with the right driver installed —
+    # postgres_dsn's default is Postgres, but the test suite points this at
+    # SQLite (sqlite+aiosqlite:///...) since there's no Postgres in this
+    # environment to test against for real.
+    statute_backend: Literal["in_memory", "sql"] = "in_memory"
 
     # Ingestion (polite crawling — see ingestion/rate_limiter.py)
     ingestion_user_agent: str = "legal-engine-bot/0.1 (+contact: set LEGAL_ENGINE_INGESTION_CONTACT)"
