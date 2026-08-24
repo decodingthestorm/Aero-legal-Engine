@@ -2,8 +2,16 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # Both names on purpose. This repo's branch is `master`, and listing
+    # only `main` meant CI never fired once across twelve releases — the
+    # workflow existed, looked configured, and was never a gate. Listing
+    # both survives a future default-branch rename rather than trading one
+    # silent no-op for another.
+    branches: [main, master]
   pull_request:
+  # Manual trigger, so "has this ever actually run?" is answerable without
+  # pushing a commit to find out.
+  workflow_dispatch:
 
 jobs:
   test:

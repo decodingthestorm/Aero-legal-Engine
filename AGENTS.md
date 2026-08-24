@@ -15,16 +15,13 @@ mypy src/legal_engine    # strict; `make typecheck` runs the same thing
 pytest
 ```
 
-Then, always, before `git status` or staging:
-
-```bash
-rm -rf data
-```
-
-The suite writes a WAL under `data/` despite `tests/conftest.py`'s `_isolate_wal_path`
-fixture — `data/wal/signing_key.bin` intermittently lands in the real repo directory
-after a full run. It's gitignored and doesn't affect pass/fail, but the stray directory
-is noise and the cause has never been fully pinned down.
+If a stray `data/` directory appears in the repo root, `rm -rf data` before staging.
+It's gitignored and doesn't affect pass/fail. This used to be a required step — the
+claim here was that `tests/conftest.py`'s autouse `_isolate_wal_path` fixture leaked
+`data/wal/signing_key.bin` on a full run. Three consecutive clean runs say otherwise, so
+the fixture is doing its job and the original observation was probably from running the
+API manually rather than the suite. Left as a "if you see it" note rather than deleted,
+since an intermittent fault can't be disproven by three runs.
 
 ## Verify before you implement
 
