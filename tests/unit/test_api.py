@@ -122,8 +122,7 @@ class TestSimulationRoutes:
         )
         assert response.status_code == 200
         data = response.json()
-        assert data["100.0"] == 0.0
-        assert data["110.0"] == 200.0
+        assert data == [{"x": 100.0, "y": 0.0}, {"x": 110.0, "y": 200.0}]
 
     def test_trembling_hand(self, client):
         response = client.post(

@@ -55,10 +55,21 @@ class ConvexPenaltyCurveRequest(BaseModel):
     sample_points: list[float]
 
 
-@router.post("/penalty-curve", response_model=dict[str, float])
-async def compute_penalty_curve(request: ConvexPenaltyCurveRequest) -> dict[str, float]:
+class PenaltyCurvePoint(BaseModel):
+    x: float
+    y: float
+
+
+@router.post("/penalty-curve", response_model=list[PenaltyCurvePoint])
+async def compute_penalty_curve(request: ConvexPenaltyCurveRequest) -> list[PenaltyCurvePoint]:
+    # A list of {x, y} points, not a dict keyed by str(x): Python's str() on
+    # a whole-number float ("50.0") and JavaScript's String() on the same
+    # value ("50") don't agree, so a stringified-float key silently fails
+    # to round-trip to a client that formats numbers the JS way — every
+    # lookup misses, the chart just renders nothing, no error anywhere.
+    # (Found by ui/e2e/simulation-card.spec.ts's first real run.)
     params = ConvexPenaltyParams(k=request.k, x_limit=request.x_limit, disgorgement=request.disgorgement)
-    return {str(x): convex_penalty(x, params) for x in request.sample_points}
+    return [PenaltyCurvePoint(x=x, y=convex_penalty(x, params)) for x in request.sample_points]
 
 
 class TremblingHandRequest(BaseModel):

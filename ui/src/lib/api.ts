@@ -140,11 +140,16 @@ export interface PenaltyCurveRequest {
   sample_points: number[];
 }
 
+export interface PenaltyCurvePoint {
+  x: number;
+  y: number;
+}
+
 export function computePenaltyCurve(
   request: PenaltyCurveRequest,
   token?: string
-): Promise<Record<string, number>> {
-  return apiFetch<Record<string, number>>(
+): Promise<PenaltyCurvePoint[]> {
+  return apiFetch<PenaltyCurvePoint[]>(
     "/simulation/penalty-curve",
     { method: "POST", body: JSON.stringify(request) },
     token

@@ -61,11 +61,7 @@ export default function SimulationCard() {
         { k: Number(k), x_limit: limit, sample_points: samplePoints },
         token ?? undefined
       );
-      const points = samplePoints
-        .map((x) => ({ x, y: result[String(x)] }))
-        .filter((p): p is CurvePoint => typeof p.y === "number")
-        .sort((a, b) => a.x - b.x);
-      setCurvePoints(points);
+      setCurvePoints([...result].sort((a, b) => a.x - b.x));
     } catch (err) {
       setCurveError(err instanceof ApiError ? err.detail : String(err));
       setCurvePoints([]);
