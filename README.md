@@ -6,14 +6,15 @@ v1.0.0 marked the completion of the 5-phase build plan below: every subsystem th
 called for exists and has a passing test suite. v1.1.0 closed three of the five items that v1.0.0's
 Known Limitations honestly flagged as open — startup reindexing, cross-browser E2E coverage, and
 load-test hardening (including a graceful-degradation path for genuine solver timeouts) — leaving
-two deliberately not done: multi-tenant auth and a liability-disclaimer UI. v1.2.0 closes the
-multi-tenant auth gap for real: `StatuteRepository`, `GraphService`, and `VectorIndex` are now all
-tenant-scoped end-to-end, driven by the `tenant_id` claim in the JWT a client authenticates with
-(see "Multi-tenant data isolation" below). The liability-disclaimer UI item remains deliberately
-declined (see Known Limitations) — it was assessed as security theater (a client-controlled header
-check with no enforcement teeth) rather than a real control, and no alternative for it has been
-requested. This still doesn't mean "battle-tested production system" — read on for what would
-still take.
+two deliberately not done: multi-tenant auth and a liability-disclaimer UI. v1.2.0 closes both, but
+not in the form originally proposed for either: multi-tenant isolation is real end-to-end scoping
+(`StatuteRepository`, `GraphService`, and `VectorIndex` all driven by the JWT's `tenant_id` claim —
+see "Multi-tenant data isolation" below), not just a token check; and the liability item is a
+one-time, per-tenant, cryptographically-logged disclaimer acceptance (see "Liability disclaimer &
+consent" below), not a per-request header or a client-side modal — both of those were assessed and
+rejected as security theater (client-controlled, no enforcement teeth, easy to characterize as
+manufactured compliance rather than genuine consent) before building what's here instead. This
+still doesn't mean "battle-tested production system" — read on for what would still take.
 
 ## What's built
 
@@ -59,7 +60,15 @@ still take.
   audit log. `verify()` replays the whole chain and catches any tampering with a past entry's
   payload, its `prev_hash` link, or its signature. Unlike the knowledge_graph backends,
   `cryptography` is a hard dependency here, not a lazy-imported optional one — there's no
-  meaningful lightweight version of "the audit log, but unsigned."
+  meaningful lightweight version of "the audit log, but unsigned." Since v1.2.0 it's wired into
+  the live API (`api/main.py`'s `lifespan`, not just the standalone
+  `tests/integration/test_ingest_to_proof.py` walkthrough it started as) via
+  `load_or_create_signing_key`, which persists the Ed25519 private key to disk (unencrypted —
+  see its docstring) so the same key signs every entry across restarts; a key regenerated on every
+  startup would make every entry recorded before that restart fail `verify()` against the new
+  public key. See "Liability disclaimer & consent" below for what it's actually used for so far.
+- **`compliance/consent.py`** — per-tenant liability-disclaimer acceptance, recorded as WAL entries
+  rather than a separate consent table. See "Liability disclaimer & consent" below.
 - **`workers/`** — a real Celery app (`celery_app.py`, Redis broker/backend, matching
   `docker/docker-compose.yml`) and two tasks (`crawl_and_parse`, `index_statute_embedding`).
   Both are fully tested via `.apply(...).get()`, which runs a task synchronously in-process with
@@ -69,7 +78,8 @@ still take.
   `/verification/verify` (accepts a JSON mirror of the EPR formula AST, a discriminated union on
   `kind`, and returns both the `ProofResult` and the rendered SMT-LIB2 text), `/simulation/penalty`
   and `/simulation/trembling-hand`, `/refactoring/detect-loopholes`, `/graph/statutes` +
-  `/graph/preemption/{entity_id}` + `/graph/search`, `/ingestion/jobs`, and `/auth/token`.
+  `/graph/preemption/{entity_id}` + `/graph/search`, `/ingestion/jobs`, `/auth/token`, and
+  `/legal/disclaimer` + `/legal/accept` (see "Liability disclaimer & consent" below).
   Every route depends on the knowledge_graph Protocol interfaces rather than concrete classes;
   which concrete class each resolves to is decided by `knowledge_graph/factory.py`, itself driven
   by `core.config.settings` (`graph_backend`/`vector_backend`/`embedding_backend`) — swapping in
@@ -144,6 +154,50 @@ remains the one configured demo credential, scoped to `settings.api_client_tenan
 isolation *mechanism* works for however many tenants actually have credentials, which is what's
 tested (via directly-minted tokens with different `tenant_id` claims, standing in for a second
 registered client), but there's no API to provision a real second tenant/credential pair yet.
+
+### Liability disclaimer & consent
+
+Added in v1.2.0, closing v1.1.0's other declined item — but not as originally proposed. Two shapes
+were considered and rejected first: an `X-Legal-Disclaimer` request header, and a client-side
+modal/`localStorage` flag. Both are client-controlled and unenforceable server-side; a third
+proposal (an exact-string-match field required on every `/verification/verify` and
+`/simulation/*` call) was also rejected — its own stated implementation had the frontend SDK
+auto-inject the string into every request, meaning no human ever actually saw or clicked anything,
+which proves a client sent a string, not that an identified person agreed to a disclaimer. What
+shipped instead is closer to a real click-through EULA:
+
+- **`GET /legal/disclaimer`** — unauthenticated, returns the current disclaimer text and its
+  version (`compliance/consent.py`'s `DISCLAIMER_VERSION`, a code constant — changing what a
+  tenant is asked to agree to is a reviewed code change and a version bump, not a runtime setting).
+- **`POST /legal/accept`** — requires a valid bearer token; records one WAL entry
+  (`legal_disclaimer_accepted`) containing the tenant_id, the disclaimer version, and the
+  *token's own `sub` claim* as the accepting subject — never a client-supplied field, so nobody can
+  put an arbitrary name in the record. Idempotent from the caller's perspective (`already_accepted`
+  in the response) but not silently deduplicated in the log — a repeat acceptance is itself
+  recorded as a fact, not swallowed.
+- **`require_consent`** (`api/dependencies.py`) gates `/verification` and `/simulation` — the two
+  subsystems the disclaimer text is actually about — on an on-record acceptance of the *current*
+  version for that request's tenant. Like `require_auth`/`get_current_tenant`, it no-ops when
+  `settings.api_auth_enabled` is off, so the default dev/test posture is unaffected.
+- Because acceptance lives in the WAL, it inherits the WAL's actual property: `wal.verify()`
+  detects a forged or backdated acceptance the same way it detects tampering with any other entry
+  (`tests/unit/test_consent.py::test_acceptance_is_tamper_evident`). That's the real content behind
+  "non-repudiation" here — not the previous proposal's unenforced client-side check, an
+  identified-tenant's acceptance in a hash-chained, Ed25519-signed log that a forgery attempt is
+  cryptographically detectable in.
+
+`tests/integration/test_legal_consent_gate.py` proves this end-to-end: verification/simulation
+403 before acceptance, 200 after; `GET /legal/disclaimer` needs no token; acceptance for one
+tenant never unblocks another (same isolation guarantee as the data-isolation section above);
+`refactoring`/`graph`/`ingestion` stay ungated by this, since they're not what the disclaimer is
+about.
+
+**What this still isn't**: the WAL's signing key is persisted to disk unencrypted
+(`load_or_create_signing_key` in `core/wal.py`) — real production hardening wants that in a
+secrets manager/KMS, not a bare file next to the log it signs, the same gap this codebase's other
+plaintext-default secrets (`jwt_secret`, `api_client_secret`) already have. And `has_accepted_current_disclaimer`
+scans every WAL entry on each gated request — fine at this system's current scale, not something
+that's been load-tested the way `/verification/verify` has (see "Load testing" below).
 - **`ui/`** — a Next.js (Pages Router, TypeScript, Tailwind) dashboard: `ProofInspector` (submit a
   clause, see the `ProofResult` and its SMT-LIB2 rendering), `SimulationCard` (deterrence-penalty
   calculator plus an SVG-rendered convex penalty curve), and `GraphViewer` (add a statute, resolve
@@ -280,6 +334,14 @@ Read this before treating any of the above as more finished than it is:
   real. Swapping in PyJWT/passlib for the same single-credential check still wouldn't address this —
   what's needed is a user/tenant registry (sign-up, credential issuance, tenant provisioning), which
   is a genuine feature to build deliberately, not a drop-in.
+- **The liability-disclaimer consent record is real (tamper-evident, tied to a server-verified
+  token subject, tenant-scoped) but its supporting infrastructure is minimal.** The WAL's Ed25519
+  signing key is a plaintext file on disk (`load_or_create_signing_key`) — fine for this
+  environment, not where a real deployment wants its signing key. There's no way to revoke or
+  amend an acceptance once recorded (append-only is the point, but that also means no "the tenant's
+  authorized signer changed" flow exists yet), and the disclaimer-check scans the full WAL on every
+  gated request rather than something indexed — untested at any real scale. See "Liability
+  disclaimer & consent" above for what it does establish.
 - **Load testing has been run a few times, at up to 300 concurrent users, on one machine.** That's
   real evidence the concurrency fix holds, that the Z3 timeout budget is respected even under heavy
   queueing, and that larger response payloads don't change that — it is not evidence of behavior at

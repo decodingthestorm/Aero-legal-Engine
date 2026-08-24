@@ -14,6 +14,8 @@ build/
 !.env.example
 *.log
 data/wal/*.log
+data/wal/*.jsonl
+data/wal/signing_key.bin
 node_modules/
 ui/.next/
 ui/out/

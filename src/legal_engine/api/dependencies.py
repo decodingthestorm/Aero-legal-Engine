@@ -25,7 +25,9 @@ from typing import Annotated
 from fastapi import Depends, HTTPException, Request, status
 
 from legal_engine.api.security import InvalidTokenError, get_token_tenant, verify_token
+from legal_engine.compliance.consent import DISCLAIMER_VERSION, has_accepted_current_disclaimer
 from legal_engine.core.config import settings
+from legal_engine.core.wal import WriteAheadLog
 from legal_engine.formal_logic.solver_pool import SolverPool
 from legal_engine.ingestion.rate_limiter import PoliteFetcher
 from legal_engine.knowledge_graph.embeddings import Embedder
@@ -87,6 +89,10 @@ def get_statute_repository(request: Request) -> StatuteRepository:
     return request.app.state.statute_repository
 
 
+def get_wal(request: Request) -> WriteAheadLog:
+    return request.app.state.wal
+
+
 async def require_auth(request: Request) -> str | None:
     """No-ops (returns None) when settings.api_auth_enabled is False — the
     default, and what every other test in this suite runs against. When
@@ -105,10 +111,31 @@ async def require_auth(request: Request) -> str | None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
 
 
+async def require_consent(request: Request, tenant_id: Annotated[str, Depends(get_current_tenant)]) -> None:
+    """No-ops when settings.api_auth_enabled is False, same as
+    require_auth/get_current_tenant — consent enforcement only means
+    anything once requests are tied to a real, identified tenant. When
+    enabled, 403s unless that tenant has an acceptance-of-the-current-
+    disclaimer-version entry on record in the WAL (see
+    compliance/consent.py, POST /legal/accept)."""
+    if not settings.api_auth_enabled:
+        return
+    wal: WriteAheadLog = request.app.state.wal
+    if not has_accepted_current_disclaimer(wal, tenant_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Tenant has not accepted disclaimer version {DISCLAIMER_VERSION!r}. "
+                "See GET /legal/disclaimer and POST /legal/accept."
+            ),
+        )
+
+
 GraphServiceDep = Annotated[GraphService, Depends(get_graph_service)]
 VectorIndexDep = Annotated[VectorIndex, Depends(get_vector_index)]
 EmbedderDep = Annotated[Embedder, Depends(get_embedder)]
 SolverPoolDep = Annotated[SolverPool, Depends(get_solver_pool)]
 FetcherDep = Annotated[PoliteFetcher, Depends(get_fetcher)]
 StatuteRepositoryDep = Annotated[StatuteRepository, Depends(get_statute_repository)]
+WalDep = Annotated[WriteAheadLog, Depends(get_wal)]
 TenantIdDep = Annotated[str, Depends(get_current_tenant)]

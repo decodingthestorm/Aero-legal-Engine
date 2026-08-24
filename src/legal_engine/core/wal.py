@@ -26,6 +26,7 @@ from pathlib import Path
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat
 
 from legal_engine.core.exceptions import WALIntegrityError
 from legal_engine.core.models import WALEntry
@@ -35,6 +36,36 @@ GENESIS_HASH = "0" * 96  # SHA-384 digests are 48 bytes = 96 hex chars
 
 def generate_signing_key() -> Ed25519PrivateKey:
     return Ed25519PrivateKey.generate()
+
+
+def load_or_create_signing_key(path: Path) -> Ed25519PrivateKey:
+    """Loads the Ed25519 private key raw-bytes-encoded at ``path`` if it
+    exists, otherwise generates a fresh one and persists it there.
+
+    The WAL's signatures are only meaningful across process restarts if the
+    same key signs every entry — regenerating a random key on every startup
+    (what every caller of ``generate_signing_key()`` before this did) would
+    mean every previously-signed entry fails ``verify()`` against the new
+    public key the instant the process restarts, defeating the point of a
+    durable audit log.
+
+    The key is written to disk unencrypted. That's consistent with this
+    codebase's other plaintext-default secrets (``settings.jwt_secret``,
+    ``settings.api_client_secret`` — see their "change-me-in-production"
+    defaults), not a gap unique to this file: a real deployment wants this
+    in a proper secrets manager/KMS, not a bare file next to the audit log
+    it signs.
+    """
+    if path.exists():
+        return Ed25519PrivateKey.from_private_bytes(path.read_bytes())
+    key = generate_signing_key()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(
+        key.private_bytes(
+            encoding=Encoding.Raw, format=PrivateFormat.Raw, encryption_algorithm=NoEncryption()
+        )
+    )
+    return key
 
 
 def _compute_payload_hash(

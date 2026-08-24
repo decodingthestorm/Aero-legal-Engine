@@ -44,11 +44,19 @@ class TestAuthEnabled:
         )
         assert token_response.status_code == 200
         token = token_response.json()["access_token"]
+        headers = {"Authorization": f"Bearer {token}"}
+
+        # /simulation is also gated on liability-disclaimer acceptance (see
+        # tests/integration/test_legal_consent_gate.py for that gate's own
+        # dedicated coverage) — accepting it here reflects the real
+        # authenticated flow this test is otherwise proving out.
+        accept_response = auth_enabled_client.post("/legal/accept", headers=headers)
+        assert accept_response.status_code == 200
 
         response = auth_enabled_client.post(
             "/simulation/penalty",
             json={"benefit": 100, "cost_compliance": 10, "p_detect": 0.3},
-            headers={"Authorization": f"Bearer {token}"},
+            headers=headers,
         )
         assert response.status_code == 200
 
