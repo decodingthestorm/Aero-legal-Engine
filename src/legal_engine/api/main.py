@@ -37,7 +37,7 @@ from legal_engine.formal_logic.solver_pool import SolverPool
 from legal_engine.ingestion.rate_limiter import PoliteFetcher
 from legal_engine.knowledge_graph.factory import build_embedder
 from legal_engine.knowledge_graph.tenant_registry import TenantIndexRegistry
-from legal_engine.persistence.factory import build_statute_repository
+from legal_engine.persistence.factory import build_statute_repository, build_user_repository
 from legal_engine.persistence.hydration import hydrate_indexes
 
 logger = get_logger(__name__)
@@ -60,6 +60,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.fetcher = PoliteFetcher()
     app.state.statute_repository = build_statute_repository()
     await app.state.statute_repository.create_schema()
+    app.state.user_repository = build_user_repository()
+    await app.state.user_repository.create_schema()
 
     # The audit/consent log (core/wal.py, compliance/consent.py). Loads the
     # settings.wal_signer_backend-selected KeySigner (core/key_signer.py,
@@ -85,17 +87,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         await app.state.fetcher.aclose()
         await app.state.statute_repository.close()
+        await app.state.user_repository.close()
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Legal Engine Platform API", version="1.2.3", lifespan=lifespan)
+    app = FastAPI(title="Legal Engine Platform API", version="1.3.0", lifespan=lifespan)
     add_middleware(app)
 
-    # /auth/token and /legal/disclaimer must stay unprotected (the former is
-    # the only way to get a token in the first place; the latter should be
-    # readable by anyone deciding whether to agree to it). Every other
-    # router requires auth, though require_auth no-ops unless
-    # settings.api_auth_enabled is set.
+    # /auth (token/register) and /legal/disclaimer must stay unprotected
+    # (the former is the only way to get a token in the first place; the
+    # latter should be readable by anyone deciding whether to agree to
+    # it). Every other router requires auth, though require_auth no-ops
+    # unless settings.api_auth_enabled is set.
     app.include_router(auth.router, prefix="/auth", tags=["auth"])
     app.include_router(legal.router, prefix="/legal", tags=["legal"])
 

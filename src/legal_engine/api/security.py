@@ -1,4 +1,4 @@
-"""Minimal, dependency-free HS256 JWT create/verify.
+"""Minimal, dependency-free HS256 JWT create/verify, plus password hashing.
 
 A full JWT library (PyJWT, python-jose) would normally be the right call
 for a production auth system — multiple algorithms, JWKS, refresh tokens,
@@ -7,6 +7,13 @@ single shared secret (settings.jwt_secret), which is simple enough to
 implement correctly against RFC 7519 with just the standard library, so
 that's what this does rather than adding a dependency for a few dozen
 lines of base64/HMAC.
+
+Password hashing (hash_password/verify_password) is the same philosophy
+applied to a second primitive: hashlib.pbkdf2_hmac is a correct standard-
+library implementation of a standard, NIST-approved algorithm — using it
+correctly (a high iteration count, a random salt per password, a
+constant-time comparison) isn't "rolling your own crypto" in the risky
+sense, any more than the HS256 signing above is.
 """
 
 from __future__ import annotations
@@ -16,13 +23,49 @@ import binascii
 import hashlib
 import hmac
 import json
+import secrets
 import time
+from uuid import uuid4
 
 from legal_engine.core.config import settings
+
+_PBKDF2_ITERATIONS = 600_000  # OWASP's current minimum recommendation for PBKDF2-SHA256
+_PBKDF2_SALT_BYTES = 16
 
 
 class InvalidTokenError(Exception):
     """Raised when a JWT fails signature verification, is expired, or is malformed."""
+
+
+def hash_password(password: str) -> str:
+    """Returns a self-describing hash string:
+    ``pbkdf2_sha256$<iterations>$<salt_hex>$<hash_hex>``. Embedding the
+    iteration count (rather than only reading it from settings at verify
+    time) means a future bump to _PBKDF2_ITERATIONS doesn't invalidate —
+    or silently under-verify — every password hashed under the old count;
+    each hash still records exactly what it was created with."""
+    salt = secrets.token_bytes(_PBKDF2_SALT_BYTES)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, _PBKDF2_ITERATIONS)
+    return f"pbkdf2_sha256${_PBKDF2_ITERATIONS}${salt.hex()}${digest.hex()}"
+
+
+def verify_password(password: str, password_hash: str) -> bool:
+    """Returns False (never raises) for a malformed hash string, the same
+    way a wrong password just fails rather than erroring — callers
+    shouldn't need to distinguish "corrupt record" from "wrong password."
+    """
+    try:
+        algorithm, iterations_str, salt_hex, digest_hex = password_hash.split("$")
+        if algorithm != "pbkdf2_sha256":
+            return False
+        iterations = int(iterations_str)
+        salt = bytes.fromhex(salt_hex)
+        expected_digest = bytes.fromhex(digest_hex)
+    except ValueError:
+        return False
+
+    actual_digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+    return hmac.compare_digest(actual_digest, expected_digest)
 
 
 def _b64url_encode(data: bytes) -> str:
@@ -34,11 +77,33 @@ def _b64url_decode(data: str) -> bytes:
     return base64.urlsafe_b64decode(data + padding)
 
 
-def create_token(subject: str, tenant_id: str, expires_minutes: int | None = None) -> str:
+def create_token(
+    subject: str,
+    tenant_id: str,
+    expires_minutes: int | None = None,
+    token_type: str = "access",
+    jti: str | None = None,
+) -> str:
+    """``jti`` (JWT ID) is auto-generated (uuid4) unless given explicitly —
+    it's what a per-token revocation/redemption record (see
+    compliance/token_ledger.py) is keyed on, since ``sub`` alone only
+    identifies the *user*, not this specific token. ``token_type``
+    distinguishes a normal bearer ("access") token from a refresh token —
+    api/dependencies.py's require_auth rejects a refresh token presented
+    as a bearer token, since the two are meant for entirely different
+    endpoints (refresh tokens are only ever redeemed at POST
+    /auth/refresh)."""
     expires_minutes = expires_minutes if expires_minutes is not None else settings.jwt_expires_minutes
     header = {"alg": settings.jwt_algorithm, "typ": "JWT"}
     now = int(time.time())
-    payload = {"sub": subject, "tenant_id": tenant_id, "iat": now, "exp": now + expires_minutes * 60}
+    payload = {
+        "sub": subject,
+        "tenant_id": tenant_id,
+        "jti": jti if jti is not None else str(uuid4()),
+        "token_type": token_type,
+        "iat": now,
+        "exp": now + expires_minutes * 60,
+    }
 
     header_b64 = _b64url_encode(json.dumps(header, separators=(",", ":")).encode("utf-8"))
     payload_b64 = _b64url_encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))

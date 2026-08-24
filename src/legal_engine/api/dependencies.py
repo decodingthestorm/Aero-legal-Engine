@@ -35,6 +35,7 @@ from legal_engine.knowledge_graph.graph_service import GraphService
 from legal_engine.knowledge_graph.tenant_registry import TenantIndexRegistry
 from legal_engine.knowledge_graph.vector_service import VectorIndex
 from legal_engine.persistence.repository import StatuteRepository
+from legal_engine.persistence.user_repository import UserRepository
 
 
 async def get_current_tenant(request: Request) -> str:
@@ -89,6 +90,10 @@ def get_statute_repository(request: Request) -> StatuteRepository:
     return request.app.state.statute_repository
 
 
+def get_user_repository(request: Request) -> UserRepository:
+    return request.app.state.user_repository
+
+
 def get_wal(request: Request) -> WriteAheadLog:
     return request.app.state.wal
 
@@ -141,6 +146,7 @@ EmbedderDep = Annotated[Embedder, Depends(get_embedder)]
 SolverPoolDep = Annotated[SolverPool, Depends(get_solver_pool)]
 FetcherDep = Annotated[PoliteFetcher, Depends(get_fetcher)]
 StatuteRepositoryDep = Annotated[StatuteRepository, Depends(get_statute_repository)]
+UserRepositoryDep = Annotated[UserRepository, Depends(get_user_repository)]
 WalDep = Annotated[WriteAheadLog, Depends(get_wal)]
 ConsentLedgerDep = Annotated[ConsentLedger, Depends(get_consent_ledger)]
 TenantIdDep = Annotated[str, Depends(get_current_tenant)]

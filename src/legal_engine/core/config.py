@@ -50,6 +50,13 @@ class Settings(BaseSettings):
     # SQLite (sqlite+aiosqlite:///...) since there's no Postgres in this
     # environment to test against for real.
     statute_backend: Literal["in_memory", "sql"] = "in_memory"
+    # persistence/user_repository.py: the registered-user store behind
+    # POST /auth/register and POST /auth/token's real-user login path.
+    # Same in_memory/sql split and same postgres_dsn as statute_backend —
+    # a real deployment wants "sql" for both, but they're independent
+    # settings in case a caller genuinely wants one persisted and not the
+    # other (e.g. ephemeral demo statutes, durable user accounts).
+    user_backend: Literal["in_memory", "sql"] = "in_memory"
 
     # Ingestion (polite crawling — see ingestion/rate_limiter.py)
     ingestion_user_agent: str = "legal-engine-bot/0.1 (+contact: set LEGAL_ENGINE_INGESTION_CONTACT)"
@@ -85,16 +92,25 @@ class Settings(BaseSettings):
     api_auth_enabled: bool = False
     api_client_id: str = "demo"
     api_client_secret: str = "change-me-in-production"
-    # The one demo credential's tenant. There's still no user/tenant
-    # registration system — this is the single tenant that single
-    # credential's tokens are scoped to — but the *isolation mechanism*
-    # itself (StatuteRepository/GraphService/VectorIndex all keyed by
-    # tenant_id) works for however many tenants actually have credentials,
-    # which is what's tested. See README's "Known limitations".
+    # The demo credential's tenant. This one credential still always
+    # works unconditionally (POST /auth/token checks it before the real
+    # user registry) so zero-config local dev stays zero-config — but
+    # POST /auth/register now provisions real, independent tenants too;
+    # this is no longer the *only* tenant that can exist. See "User
+    # accounts, tokens & revocation" in the README.
     api_client_tenant_id: str = "demo-tenant"
     jwt_secret: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"
     jwt_expires_minutes: int = 60
+    # POST /auth/refresh exchanges a still-valid, not-yet-redeemed refresh
+    # token for a new access+refresh pair (rotation: the old refresh
+    # token is spent the instant it's used — see
+    # compliance/token_ledger.py). Refresh tokens intentionally outlive
+    # access tokens by a lot, the same reason any refresh-token design
+    # does: the access token is what's on the wire on every request (so
+    # it should have a short exposure window), the refresh token is only
+    # ever sent to one single-purpose endpoint.
+    refresh_token_expires_days: int = 30
 
     # Tenant every request is scoped to when settings.api_auth_enabled is
     # False (the default) — the whole deployment behaves as one tenant,

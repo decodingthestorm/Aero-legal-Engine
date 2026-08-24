@@ -31,8 +31,13 @@ v1.2.3 takes the KMS/HSM item off that roadmap too, in scoped form: `KeySigner`
 Ed25519-file backend as the default and lazy-imported AWS KMS/HashiCorp Vault adapters as
 real, dispatching alternatives — genuinely correct against the installed boto3/hvac packages'
 actual API contracts (verified by introspection, not memory), but not exercised against a live AWS
-account or Vault instance, which this environment doesn't have. This still doesn't mean
-"battle-tested production system" — read on for what would still take.
+account or Vault instance, which this environment doesn't have. v1.3.0 goes after the other
+long-standing gap the "Known limitations" section flagged in its own words: `POST /auth/register`
+(see "User registration & login" below) is a real, self-service user/tenant registry — the
+"no user/tenant registration system to provision a second real credential" line is no longer true.
+Token revocation and refresh-token redemption are the deliberately-separate next piece, not yet
+built as of this version (see Known limitations). This still doesn't mean "battle-tested production
+system" — read on for what would still take.
 
 ## What's built
 
@@ -122,8 +127,9 @@ account or Vault instance, which this environment doesn't have. This still doesn
   `/verification/verify` (accepts a JSON mirror of the EPR formula AST, a discriminated union on
   `kind`, and returns both the `ProofResult` and the rendered SMT-LIB2 text), `/simulation/penalty`
   and `/simulation/trembling-hand`, `/refactoring/detect-loopholes` + `/refactoring/sparse-patch`, `/graph/statutes` +
-  `/graph/preemption/{entity_id}` + `/graph/search`, `/ingestion/jobs`, `/auth/token`, and
-  `/legal/disclaimer` + `/legal/accept` (see "Liability disclaimer & consent" below).
+  `/graph/preemption/{entity_id}` + `/graph/search`, `/ingestion/jobs`, `/auth/token` +
+  `/auth/register` (see "User registration & login" below), and `/legal/disclaimer` +
+  `/legal/accept` (see "Liability disclaimer & consent" below).
   Every route depends on the knowledge_graph Protocol interfaces rather than concrete classes;
   which concrete class each resolves to is decided by `knowledge_graph/factory.py`, itself driven
   by `core.config.settings` (`graph_backend`/`vector_backend`/`embedding_backend`) — swapping in
@@ -193,11 +199,52 @@ two distinct tenant tokens: a statute added under one tenant is invisible to `GE
 resolve in `/graph/preemption/{entity_id}`, and never surfaces in `/graph/search` — for another
 tenant's token.
 
-**What this still isn't**: there's no user/tenant registration system. `settings.api_client_id`
-remains the one configured demo credential, scoped to `settings.api_client_tenant_id` — the
-isolation *mechanism* works for however many tenants actually have credentials, which is what's
-tested (via directly-minted tokens with different `tenant_id` claims, standing in for a second
-registered client), but there's no API to provision a real second tenant/credential pair yet.
+**What this still isn't**: as of v1.3.0 there *is* a real registration path (`POST /auth/register`
+— see "User registration & login" below) provisioning genuine, independent tenants — this section's
+isolation guarantee is no longer only exercised via directly-minted tokens standing in for a second
+registered client, `tests/integration/test_registration_flow.py` proves it through real registration
+end-to-end. What's still missing: inviting a *second* user into a tenant that already has one (every
+tenant has exactly one user for now), and any notion of roles/permissions within a tenant.
+
+### User registration & login
+
+Added in v1.3.0, closing the "no way to provision a real second tenant/credential pair" gap the
+previous section used to flag. Self-service, not admin-gated: `POST /auth/register` requires no
+existing credential, matching how most SaaS trial signup works.
+
+- **`POST /auth/register`** — `{email, password}`. Always provisions a *brand-new* tenant (a
+  generated `tenant_id`) plus its first `UserAccount` — this is "start your own workspace," not
+  "join an existing one." Rejects a duplicate email with 409, an obviously-malformed email or a
+  password under 8 characters with 422. Returns the new `tenant_id` plus an access+refresh token
+  pair immediately (standard "logged in right after signup" UX) — the refresh token isn't
+  redeemable yet (`POST /auth/refresh` is a v1.3.x follow-up; see Known limitations), only recorded
+  for that endpoint to check against once it exists.
+- **`POST /auth/token`** — kept backward-compatible: the demo credential
+  (`settings.api_client_id`/`api_client_secret`) still works unconditionally, so zero-config local
+  dev and every pre-existing test stay unaffected. It now *also* checks the real user registry —
+  `client_id` doubling as a registered email, `client_secret` as the password — so real accounts log
+  in through the same endpoint rather than a separate one.
+- **`persistence/user_repository.py`** — `UserRepository`, in-memory by default,
+  `settings.user_backend = "sql"` for the same SQLAlchemy-backed durability
+  `persistence/repository.py`/`sql_repository.py` already give `StatuteRepository` (same file, same
+  DSN, a second table). Deliberately *not* tenant-scoped the way `StatuteRepository` is: email is
+  globally unique, because `POST /auth/token`'s login flow only has an email + password to go on,
+  not a tenant_id yet — resolving "which account does this email belong to" has to be a global
+  lookup. That's a property of the login credential itself, not a breach of the data-isolation
+  guarantee above, which is about tenant *data*, not the login system's own account lookup.
+- **`api/security.py`**'s `hash_password`/`verify_password` — `hashlib.pbkdf2_hmac` (600,000
+  iterations, OWASP's current minimum, a random salt per password, constant-time comparison via
+  `hmac.compare_digest`), the same "correct use of a standard-library primitive" philosophy this
+  file already applies to its hand-rolled HS256 JWT signing. Every issued token also now carries a
+  `jti` (unique per token) and a `token_type` claim, unused by anything yet in v1.3.0 — added now so
+  the token shape doesn't need a second breaking change once revocation/refresh redemption
+  (`compliance/token_ledger.py`) lands.
+
+`tests/integration/test_registration_flow.py` proves this end-to-end: a registered account's token
+works on a protected route, a duplicate email is rejected, a registered user logs in via the same
+`/auth/token` the demo credential uses, two separate registrations get two tenants fully isolated
+from each other (reusing the exact guarantee "Multi-tenant data isolation" above proves for
+directly-minted tokens — this proves it holds for tokens obtained the real way).
 
 ### Liability disclaimer & consent
 
@@ -388,15 +435,17 @@ Read this before treating any of the above as more finished than it is:
   executed yet as of this commit (it will on the next push). Treat "the UI has real, cross-browser-
   configured behavioral test coverage, and it already found and fixed one bug" as established;
   treat "this has run in CI, repeatedly, over time" as not yet true.
-- **Auth's credential check is still deliberately minimal; its data-isolation guarantee is not.**
-  As of v1.2.0, `StatuteRepository`/`GraphService`/`VectorIndex` are genuinely tenant-scoped end to
-  end (see "Multi-tenant data isolation" above) — that part is real, not aspirational. What's still
-  missing: one hardcoded client_id/client_secret pair (`settings.api_client_id`/`api_client_secret`),
-  no user/tenant *registration* system to provision a second real credential, no token revocation,
-  no refresh tokens. Fine for a demo gateway credential check; not what you'd want fronting anything
-  real. Swapping in PyJWT/passlib for the same single-credential check still wouldn't address this —
-  what's needed is a user/tenant registry (sign-up, credential issuance, tenant provisioning), which
-  is a genuine feature to build deliberately, not a drop-in.
+- **Registration is now real; token lifecycle management still isn't.** As of v1.2.0,
+  `StatuteRepository`/`GraphService`/`VectorIndex` are genuinely tenant-scoped end to end (see
+  "Multi-tenant data isolation" above); as of v1.3.0, `POST /auth/register` provisions genuine,
+  independent tenant/credential pairs (see "User registration & login" above) — both real, not
+  aspirational. What's still missing: no token revocation (a stolen or leaked access token is valid
+  until it naturally expires — `settings.jwt_expires_minutes`, one hour by default — nothing can
+  invalidate it early), no way to actually redeem the refresh tokens `/auth/register`/`/auth/token`
+  already issue (there's no `POST /auth/refresh` yet), no inviting a second user into an existing
+  tenant, no roles/permissions. Revocation and refresh-token redemption are the planned next piece
+  (`compliance/token_ledger.py`, following the exact same WAL-backed-projection pattern
+  `ConsentLedger` already proves out above) — not built yet as of this version.
 - **The liability-disclaimer consent record is real (tamper-evident, tied to a server-verified
   token subject, tenant-scoped, and — since `ConsentLedger` — an O(1) indexed lookup rather than a
   WAL scan) but its supporting infrastructure is still minimal.** The WAL's signing key is a

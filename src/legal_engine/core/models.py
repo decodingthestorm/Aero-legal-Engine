@@ -110,7 +110,8 @@ class ProofResult(BaseModel):
 
 
 class WALEntry(BaseModel):
-    """One append-only, hash-chained, Ed25519-signed write-ahead log entry."""
+    """One append-only, hash-chained, cryptographically-signed write-ahead
+    log entry (see core/wal.py, core/key_signer.py for which signer)."""
 
     sequence: int
     prev_hash: str
@@ -119,3 +120,16 @@ class WALEntry(BaseModel):
     event_type: str
     payload: dict
     timestamp: datetime = Field(default_factory=_utcnow)
+
+
+class UserAccount(BaseModel):
+    """A registered user, scoped to exactly one tenant (see
+    persistence/user_repository.py). ``password_hash`` is never the
+    plaintext password — see api/security.py's hash_password/
+    verify_password (PBKDF2-HMAC-SHA256, not reversible)."""
+
+    id: UUID = Field(default_factory=uuid4)
+    tenant_id: str
+    email: str
+    password_hash: str
+    created_at: datetime = Field(default_factory=_utcnow)

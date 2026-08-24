@@ -27,7 +27,13 @@ from sqlalchemy import Text, select
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-from legal_engine.core.models import GeoBoundary, JurisdictionTier, SourceType, StatuteDocument
+from legal_engine.core.models import (
+    GeoBoundary,
+    JurisdictionTier,
+    SourceType,
+    StatuteDocument,
+    UserAccount,
+)
 
 
 class Base(DeclarativeBase):
@@ -158,6 +164,71 @@ class SqlAlchemyStatuteRepository:
         async with self._session_factory() as session:
             result = await session.execute(select(StatuteRecord.tenant_id).distinct())
             return sorted(result.scalars().all())
+
+    async def close(self) -> None:
+        await self._engine.dispose()
+
+
+class UserRecord(Base):
+    __tablename__ = "users"
+
+    # email is the primary key, globally — not scoped by tenant_id the
+    # way StatuteRecord's PK is. See user_repository.py's module
+    # docstring for why: a login only has an email + password to go on,
+    # not a tenant_id, so account lookup at login time has to be global.
+    # tenant_id is still stored (every account belongs to exactly one
+    # tenant), just not part of the uniqueness boundary.
+    email: Mapped[str] = mapped_column(primary_key=True)
+    id: Mapped[UUID] = mapped_column(index=True)
+    tenant_id: Mapped[str] = mapped_column(nullable=False, index=True)
+    password_hash: Mapped[str] = mapped_column(nullable=False)
+    created_at: Mapped[datetime] = mapped_column(nullable=False)
+
+
+def _user_to_domain(record: UserRecord) -> UserAccount:
+    return UserAccount(
+        id=record.id,
+        tenant_id=record.tenant_id,
+        email=record.email,
+        password_hash=record.password_hash,
+        created_at=record.created_at,
+    )
+
+
+def _user_from_domain(user: UserAccount) -> UserRecord:
+    return UserRecord(
+        id=user.id,
+        tenant_id=user.tenant_id,
+        email=user.email,
+        password_hash=user.password_hash,
+        created_at=user.created_at,
+    )
+
+
+class SqlAlchemyUserRepository:
+    """Same DSN-driven, lazily-nothing-since-sqlalchemy-is-a-hard-import-
+    here pattern as SqlAlchemyStatuteRepository above, in the same file
+    since they're the same "sql" backend against the same database —
+    just a second table (see UserRecord), not a second engine-building
+    scheme."""
+
+    def __init__(self, dsn: str) -> None:
+        self._engine: AsyncEngine = create_async_engine(dsn)
+        self._session_factory = async_sessionmaker(self._engine, expire_on_commit=False)
+
+    async def create_schema(self) -> None:
+        async with self._engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+    async def add(self, user: UserAccount) -> None:
+        async with self._session_factory() as session:
+            await session.merge(_user_from_domain(user))
+            await session.commit()
+
+    async def get_by_email(self, email: str) -> UserAccount | None:
+        async with self._session_factory() as session:
+            record = await session.get(UserRecord, email)
+            return _user_to_domain(record) if record is not None else None
 
     async def close(self) -> None:
         await self._engine.dispose()
