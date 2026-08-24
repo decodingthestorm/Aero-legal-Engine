@@ -56,9 +56,13 @@ postgres = ["sqlalchemy>=2.0.0", "asyncpg>=0.29.0"]
 # queue pulled in. CI installs both to cover api/ and workers/ in tests.
 api = ["fastapi>=0.110.0", "uvicorn>=0.28.0"]
 workers = ["celery>=5.3.6", "redis>=5.0.1"]
+# load_tests/locustfile.py. Not part of `dev` or `all` on purpose - this is
+# a tool you run on demand against a live API, not something any test suite
+# needs installed.
+load-test = ["locust>=2.20.0"]
 
 all = [
-    "legal-engine[semantic,vector-qdrant,graph-neo4j,js-rendering,ocr,postgres,api,workers]",
+    "legal-engine[semantic,vector-qdrant,graph-neo4j,js-rendering,ocr,postgres,api,workers,load-test]",
 ]
 
 dev = [

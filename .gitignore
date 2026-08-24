@@ -19,3 +19,4 @@ ui/.next/
 ui/out/
 .coverage
 htmlcov/
+load_tests/results/

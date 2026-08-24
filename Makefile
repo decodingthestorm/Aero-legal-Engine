@@ -1,5 +1,5 @@
 .PHONY: install test test-unit test-integration test-property lint typecheck fmt run-api run-worker \
-	ui-install ui-dev ui-build docker-up docker-down
+	ui-install ui-dev ui-build load-test docker-up docker-down
 
 install:
 	pip install -e ".[dev,api,workers]"
@@ -39,6 +39,10 @@ ui-dev:
 
 ui-build:
 	cd ui && npm run build
+
+# Needs the API already running (make run-api) in another terminal.
+load-test:
+	locust -f load_tests/locustfile.py --host http://localhost:8000
 
 docker-up:
 	docker compose -f docker/docker-compose.yml up -d

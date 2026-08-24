@@ -108,6 +108,43 @@ git history on `knowledge_graph/embeddings.py` for what that surfaced). `api` an
 deployment-role extras (a library-only user shouldn't need FastAPI or Celery pulled in) rather
 than lazy-backend extras; CI installs both to cover their tests.
 
+## Load testing
+
+`load_tests/locustfile.py` (Locust — pure Python, no Docker/Node/binary tooling needed) drives a
+realistic mix of traffic against a running API, weighted toward `/verification/verify` since it's
+the one endpoint that routes through native code (the Z3 solver) rather than pure Python/NetworkX.
+
+```bash
+make run-api                                    # in one terminal
+pip install -e ".[load-test]" && make load-test  # in another — opens the Locust web UI
+```
+
+or headless, e.g. 20 users ramping at 5/s for 45s:
+
+```bash
+locust -f load_tests/locustfile.py --host http://localhost:8000 --headless -u 20 -r 5 -t 45s
+```
+
+**Running this for the first time found a real, serious bug**: `formal_logic/solver_pool.py`
+built every Z3 object on Z3's implicit default/global context, which Z3's own documentation says
+plainly isn't safe to use concurrently across threads. It wasn't theoretical — 20 concurrent users
+against the default `settings.z3_pool_size=4` reliably produced `z3.Z3Exception: 'not a valid ast'`
+and outright native access-violation crashes that took the whole server process down within
+seconds. Every existing unit test for `SolverPool` used `pool_size=1` (sequential), so nothing in
+the test suite had ever exercised true concurrent Z3 use before something actually sent it
+concurrent load. Fixed by giving every `check()` call its own `z3.Context()` — full isolation per
+concurrent solve, which is what Z3's Python API guidance for multi-threaded use actually calls for
+(see the module docstring for the detailed writeup, and
+`tests/unit/test_solver_pool_concurrency.py` for the regression test: many concurrent `check()`
+calls via a real thread pool, driven directly rather than through HTTP, so it doesn't need a
+running server to catch a regression here again).
+
+After the fix, the same 20-user / 45-second run against a live API: **1,901 requests, 0 failures**,
+`/verification/verify` (the heaviest endpoint) at p50=10ms / p99=18ms / max=40ms — comfortably
+inside the 480ms Z3 timeout budget (`settings.z3_timeout_ms`) even under concurrent load. This was
+run once, on one machine, at a modest scale (20 concurrent users) — see Known limitations for what
+that does and doesn't prove.
+
 ## Known limitations
 
 Read this before treating any of the above as more finished than it is:
@@ -130,9 +167,16 @@ Read this before treating any of the above as more finished than it is:
 - **Auth is deliberately minimal.** One hardcoded client_id/client_secret pair
   (`settings.api_client_id`/`api_client_secret`), no user/tenant model, no token revocation, no
   refresh tokens. Fine for a demo gateway; not what you'd want fronting anything real.
-- **No load testing.** The original spec's Phase 5 called for it; building a real load-testing
-  setup (Locust/k6 scenarios, target throughput numbers tied to the 480ms Z3 timeout budget) is
-  meaningfully separate work that wasn't attempted here.
+- **Load testing has been run once, at modest scale, on one machine.** 20 concurrent users for 45
+  seconds against every in-memory default backend is real evidence the concurrency fix above holds
+  and that typical request latencies stay well inside budget — it is not evidence of behavior at
+  production scale (hundreds+ concurrent users), under sustained multi-hour load, against the
+  Neo4j/Qdrant/Postgres backends instead of the in-memory defaults, or from multiple load-generating
+  machines instead of one. It also didn't push `/verification/verify` with deliberately larger
+  domains or deeper formulas to find where the 480ms budget actually gets tight — the formula used
+  (an 8-element domain, one quantifier) solves in single-digit milliseconds, nowhere near the
+  timeout. Treat this as "the obvious concurrency landmine has been found and defused," not "this
+  has been capacity-planned."
 - **The "formal verification" and "game-theoretic guarantees" are real math, not legal advice.**
   The EPR compiler and Z3 solver pool genuinely check what you give them; whether a hand-authored
   clause correctly captures what a statute means is a legal-drafting judgment call this system

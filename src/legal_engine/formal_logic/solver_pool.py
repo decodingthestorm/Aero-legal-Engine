@@ -5,6 +5,19 @@ SMT-LIB2 text from smt_generator.py) so that each top-level conjunct of the
 matrix can be asserted with ``assert_and_track``, which is what makes
 ``solver.unsat_core()`` return something useful instead of an opaque blob.
 
+Every Z3 object created here is bound to a fresh ``z3.Context()`` per
+``check()`` call, not Z3's implicit default/global context. This isn't
+optional: Z3's own documentation is explicit that using the default context
+concurrently across threads is unsafe, and it isn't a theoretical concern —
+load testing this pool with pool_size > 1 under real concurrent traffic
+reliably produced ``z3.Z3Exception: 'not a valid ast'`` and outright native
+access-violation crashes (memory corruption in Z3's C++ core, taking the
+whole process down) within seconds. Every unit test written against this
+module before that used pool_size=1, so this was invisible until something
+actually sent it concurrent load. One ``z3.Context`` per call gives each
+concurrent solve fully isolated Z3 state, which is what the Z3 Python API
+guidance for multi-threaded use actually calls for.
+
 On sandboxing: this pool enforces Z3's own ``timeout`` and
 ``memory_max_size`` parameters, which stop a single check from running away
 inside the process. That is process-internal resource control, not OS-level
@@ -48,19 +61,21 @@ class _Z3Context:
     predicates: dict[str, z3.FuncDeclRef]
 
 
-def _build_context(formula: EPRFormula) -> _Z3Context:
-    # Z3's default context registers enum sort names globally, so reusing a
-    # fixed name (e.g. "Individual") across successive checks in the same
-    # process raises "enumeration sort name is already declared". Each check
-    # gets its own throwaway sort.
+def _build_context(formula: EPRFormula, z3_ctx: z3.Context) -> _Z3Context:
+    # Z3 registers enum sort names within a context, so reusing a fixed name
+    # (e.g. "Individual") across successive checks that happen to share a
+    # context would raise "enumeration sort name is already declared" —
+    # each check gets its own throwaway sort name regardless.
     sort_name = f"Individual_{uuid.uuid4().hex[:12]}"
     sort, domain_consts = z3.EnumSort(  # type: ignore[misc]
-        sort_name, list(formula.domain)
+        sort_name, list(formula.domain), ctx=z3_ctx
     )
     constants = {name: const for name, const in zip(formula.domain, domain_consts)}
     predicates: dict[str, z3.FuncDeclRef] = {}
     for predicate, arity in formula.predicate_arities.items():
-        predicates[predicate] = z3.Function(predicate, *([sort] * arity), z3.BoolSort())
+        predicates[predicate] = z3.Function(
+            predicate, *([sort] * arity), z3.BoolSort(ctx=z3_ctx)
+        )
     return _Z3Context(sort=sort, constants=constants, predicates=predicates)
 
 
@@ -105,6 +120,11 @@ class SolverPool:
         self._semaphore = threading.Semaphore(pool_size)
         self._timeout_ms = timeout_ms
         self._memory_limit_mb = memory_limit_mb
+        # memory_max_size is process-wide in Z3 (its memory manager is
+        # shared across every Context in the process), unlike timeout —
+        # setting it once here rather than on every check() avoids a
+        # pointless race on global state across concurrent solves.
+        z3.set_param("memory_max_size", memory_limit_mb)
 
     @contextmanager
     def _slot(self):
@@ -116,10 +136,9 @@ class SolverPool:
 
     def check(self, formula: EPRFormula) -> ProofResult:
         with self._slot():
-            z3.set_param("memory_max_size", self._memory_limit_mb)
-
-            ctx = _build_context(formula)
-            solver = z3.Solver()
+            z3_ctx = z3.Context()
+            ctx = _build_context(formula, z3_ctx)
+            solver = z3.Solver(ctx=z3_ctx)
             solver.set("timeout", self._timeout_ms)
 
             bound: dict[str, z3.ExprRef] = dict(ctx.constants)
