@@ -45,11 +45,23 @@ from legal_engine.core.models import JurisdictionTier
 class SubjectMatter(str, Enum):
     """What a provision regulates.
 
-    Deliberately narrow: these are the subjects that actually appear in
-    short-term-rental regulation, which is the first corpus. A second
-    domain would add its own members rather than forcing its concepts
-    into these. A taxonomy that tried to cover all of law in advance
+    Grown from corpora rather than designed up front. The first block
+    below comes from short-term-rental regulation, the next two from
+    measuring against Fla. Stat. ch. 509, and the employment block from
+    the floor/ceiling spike. Nothing here was added because it rounded
+    out a diagram; a taxonomy that tried to cover all of law in advance
     would be wrong everywhere instead of right somewhere.
+
+    **Known limit — one enum, now two domains.** This was documented as
+    narrow and STR-specific until employment subjects were added, and at
+    two domains a single enum with labelled sections is still the
+    simplest thing that works. It will not stay that way. The trigger to
+    split is a third domain, or any subject name that has to be qualified
+    to avoid colliding with another domain's ("DURATION" already means
+    something different to a lease than to a stay). The fix at that point
+    is per-domain taxonomies with ``Obligation.subjects`` taking a union
+    — a much larger change than adding a member, which is precisely why
+    it is worth hitting deliberately rather than by surprise.
 
     The first three are grouped because Florida's preemption names
     exactly them, but they are genuinely distinct: a ban, a minimum-stay
@@ -124,9 +136,11 @@ class SubjectMatter(str, Enum):
     BUILDING_STANDARDS = "building_standards"
     """Structural requirements: railings, stairways, egress construction.
     Distinct from FIRE_SAFETY, which is about a specific hazard."""
-    # --- employment (fork/floor-vs-ceiling spike) ---
+    # --- employment ---
     # A second domain, added to test whether the doctrine layer survives a
-    # rule system that runs in the opposite direction from preemption.
+    # rule system running opposite to preemption. It did not, which is why
+    # floors.py exists — see its module docstring. These are the subjects
+    # 29 U.S.C. 218(a) actually names.
     MINIMUM_WAGE = "minimum_wage"
     MAXIMUM_WORKWEEK = "maximum_workweek"
     OVERTIME_PREMIUM = "overtime_premium"
