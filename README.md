@@ -125,6 +125,13 @@ honestly-flagged gap from the version before it — never a rewrite, always addi
   city's parking rule is untouched, an identical cap adopted in 2010 survives, and an undated one
   cannot be decided at all. Tier-based reasoning gets three of those four wrong.
 
+- **v1.15.0** — `obligations/extraction.py` closes the loop: ordinance **prose** now reaches a
+  preemption verdict. `KeywordObligationExtractor` is the deterministic default;
+  `LlmObligationExtractor` is the real backend and fails closed, since no model is wired in here.
+  The design point isn't accuracy — it's that a provision the extractor can't classify **surfaces**
+  rather than vanishing, because a missed obligation reports an ordinance as not regulating
+  something it does regulate.
+
 None of this means "battle-tested production system" — read on for what would still take.
 
 ## What's built
@@ -673,6 +680,59 @@ the *representation and the doctrine*, not that text can be read into it — whi
 Layer 0 problem and remains open. The statute is verbatim and sourced; the municipal ordinances are
 **illustrative, not quoted**, because Municode disallows this crawler in robots.txt
 (`User-agent: ClaudeBot` / `Disallow: /`). And none of it is legal advice.
+
+### Reading prose into obligations
+
+Added in v1.15.0 (`obligations/extraction.py`). With this, raw ordinance text reaches a preemption
+verdict end to end:
+
+```
+"No dwelling unit may be rented as a vacation rental for more
+ than 90 nights in any calendar year. Adopted March 12, 2019."
+        ↓  KeywordObligationExtractor
+ prohibition · {frequency} · adopted 2019-03-12
+        ↓  express_preemption.analyze
+ PREEMPTED — "regulates frequency, which Fla. Stat. § 509.032(7)(b)
+ reserves to Florida, and it was adopted 2019-03-12, after the
+ 2011-06-01 cutoff."
+```
+
+All five outcomes are reachable from prose: preempted, grandfathered, out-of-scope, undetermined,
+and wrong-state.
+
+**The design point is not accuracy.** It's that `ExtractionResult` separates three things —
+provisions classified, provisions recognised as **normative but unclassifiable**, and text with no
+normative force. The middle category is why the module exists. If an extractor reads a night cap
+and silently produces nothing, downstream analysis concludes the ordinance has no frequency rule
+and reports the city as compliant. A wrong subject is visible; an absent one is not. So a result
+carrying any unclassified provision is **incomplete**, and `is_complete` says so.
+
+**Two bugs worth recording**, both found by running it rather than reading it:
+
+- `\bno \w+ may\b` admits exactly one word between "No" and the modal. "No **dwelling unit** may
+  be rented for more than 90 nights" is two — so it fell through to the permissive branch and a cap
+  was classified as a **permission**. A modality error inverts the provision, which is strictly
+  worse than any subject-matter mistake.
+- The adoption-date pattern lacked `re.IGNORECASE`, and real ordinances write "Adopted March 12,
+  2019" with a capital A. The date was silently missed, quietly downgrading a decidable
+  grandfathering question to `UNDETERMINED`.
+
+**A distinction the extractor has to make**: a night cap is a `FREQUENCY` rule expressed
+prohibitively — subject `frequency`, modality `prohibition`. Only an *unqualified* ban is a
+`PROHIBITION` **subject**. Conflating them would make every cap look like an outright ban, and the
+two are preempted for different reasons.
+
+**On the abstention gate**: `sample_and_gate` reuses `SemanticEntropyGate` over canonical
+structural forms, clustering by exact match rather than entailment — these are structured records,
+so two extractions either describe the same subjects and modalities or they don't. It detects an
+*unstable* extractor. It cannot detect a confidently wrong one: a deterministic extractor is
+perfectly self-consistent and may be perfectly wrong, scoring zero entropy every time.
+Self-consistency is not correctness.
+
+**What this still isn't**: keyword matching over surface forms, tuned to one narrow domain whose
+vocabulary is small and repetitive. It will miss unusually phrased provisions — which is why they
+surface as unclassified rather than as silence. `LlmObligationExtractor` carries the schema and the
+parsing path, and has never made a call.
 
 ### Statutory conflict resolution
 

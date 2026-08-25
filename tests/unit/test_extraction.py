@@ -1,0 +1,312 @@
+"""Reading ordinance prose into structured obligations.
+
+Two classes of test carry the weight. ``TestModalityIsNotInverted``
+guards a bug this extractor actually shipped with for one iteration: "No
+dwelling unit may be rented for more than 90 nights" was classified as a
+*permission*, because the leading-negation pattern allowed only a
+one-word subject and "dwelling unit" is two. A cap read as a licence is
+the worst output this component can produce — it is confidently, quietly
+backwards.
+
+``TestNothingIsSilentlyDropped`` guards the design property the module
+exists for: a provision the extractor cannot classify must surface, not
+vanish. A missing obligation is worse than a wrong one, because it
+reports an ordinance as not regulating something it does regulate.
+"""
+
+from __future__ import annotations
+
+from datetime import date
+
+import pytest
+
+from legal_engine.core.models import JurisdictionTier
+from legal_engine.obligations.corpus import FLORIDA_VACATION_RENTAL_PREEMPTION as FL_RULE
+from legal_engine.obligations.express_preemption import PreemptionStatus, analyze
+from legal_engine.obligations.extraction import (
+    ExtractionResult,
+    KeywordObligationExtractor,
+    LlmObligationExtractor,
+    sample_and_gate,
+)
+from legal_engine.obligations.models import Modality, SubjectMatter
+
+FL_PATH = ("United States", "Florida", "City of Example")
+
+
+@pytest.fixture
+def extractor() -> KeywordObligationExtractor:
+    return KeywordObligationExtractor()
+
+
+def _extract(extractor, text: str, citation: str = "§ 1", path=FL_PATH) -> ExtractionResult:
+    return extractor.extract(text, citation, JurisdictionTier.MUNICIPAL, path)
+
+
+def _only(result: ExtractionResult):
+    assert len(result.obligations) == 1, f"expected one obligation, got {len(result.obligations)}"
+    return result.obligations[0]
+
+
+class TestModalityIsNotInverted:
+    """A modality error reverses the provision's meaning."""
+
+    def test_a_multiword_subject_after_no_is_still_prohibitive(self):
+        """The regression. "dwelling unit" is two words; the original
+        pattern admitted exactly one and fell through to permissive."""
+        result = _extract(
+            KeywordObligationExtractor(),
+            "No dwelling unit may be rented as a vacation rental for more than 90 nights "
+            "in any calendar year.",
+        )
+        assert _only(result).modality is Modality.PROHIBITION
+
+    @pytest.mark.parametrize(
+        "sentence",
+        [
+            "No vacation rental may be let for a term of fewer than 7 consecutive nights.",
+            "No owner of record may rent a dwelling more than 30 times per calendar year.",
+            "A vacation rental may not be operated without a permit.",
+            "Vacation rentals shall not be permitted in residential districts.",
+            "Vacation rentals are prohibited in all residential zoning districts.",
+        ],
+    )
+    def test_prohibitive_phrasings(self, extractor, sentence):
+        assert _only(_extract(extractor, sentence)).modality is Modality.PROHIBITION
+
+    def test_shall_not_is_not_read_as_shall(self, extractor):
+        """"shall not" contains "shall" — checking obligation first would
+        turn a prohibition into a requirement."""
+        result = _extract(extractor, "Operators shall not permit occupancy above eight persons.")
+        assert _only(result).modality is Modality.PROHIBITION
+
+    def test_a_genuine_requirement_is_an_obligation(self, extractor):
+        result = _extract(extractor, "Each vacation rental shall provide one off-street parking space.")
+        assert _only(result).modality is Modality.OBLIGATION
+
+    def test_a_genuine_permission_is_a_permission(self, extractor):
+        result = _extract(extractor, "An operator may advertise the permit number on any listing.")
+        assert _only(result).modality is Modality.PERMISSION
+
+
+class TestSubjectClassification:
+    @pytest.mark.parametrize(
+        ("sentence", "expected"),
+        [
+            ("No unit may be rented more than 90 nights in any calendar year.", SubjectMatter.FREQUENCY),
+            ("No rental may be let for a term of fewer than 7 consecutive nights.", SubjectMatter.DURATION),
+            ("Each rental shall provide one off-street parking space.", SubjectMatter.PARKING),
+            ("Every rental shall register annually with the city.", SubjectMatter.PERMIT_REGISTRATION),
+            ("Operators shall remit the transient occupancy tax monthly.", SubjectMatter.TAXATION),
+            ("No rental shall exceed maximum occupancy of eight persons.", SubjectMatter.OCCUPANCY_LIMIT),
+            ("The dwelling shall be the operator's primary residence.", SubjectMatter.PRIMARY_RESIDENCE),
+            ("Amplified sound is prohibited after 10 p.m.", SubjectMatter.NOISE),
+        ],
+    )
+    def test_recognises_common_subjects(self, extractor, sentence, expected):
+        assert expected in _only(_extract(extractor, sentence)).subjects
+
+    def test_one_sentence_may_carry_several_subjects(self, extractor):
+        """A permit rule that also dictates advertising is genuinely two
+        subjects, and flattening it to one would lose a provision."""
+        result = _extract(
+            extractor,
+            "Every vacation rental shall register with the city and display its permit number "
+            "in any advertisement.",
+        )
+        subjects = _only(result).subjects
+        assert SubjectMatter.PERMIT_REGISTRATION in subjects
+        assert SubjectMatter.ADVERTISING_DISCLOSURE in subjects
+
+
+class TestProhibitionSubjectVersusModality:
+    """A quantitative limit is a limit *on something*. Only an unqualified
+    ban is a PROHIBITION subject — otherwise the ban is the modality and
+    the quantity is the subject. Conflating them would make every night
+    cap look like an outright ban, and outright bans are preempted for a
+    different reason than caps are."""
+
+    def test_a_night_cap_is_frequency_not_prohibition(self, extractor):
+        subjects = _only(
+            _extract(extractor, "No unit may be rented more than 90 nights in any calendar year.")
+        ).subjects
+        assert SubjectMatter.FREQUENCY in subjects
+        assert SubjectMatter.PROHIBITION not in subjects
+
+    def test_a_minimum_stay_is_duration_not_prohibition(self, extractor):
+        subjects = _only(
+            _extract(extractor, "No rental may be let for a term of fewer than 7 consecutive nights.")
+        ).subjects
+        assert SubjectMatter.DURATION in subjects
+        assert SubjectMatter.PROHIBITION not in subjects
+
+    def test_an_unqualified_ban_is_a_prohibition_subject(self, extractor):
+        subjects = _only(
+            _extract(extractor, "Vacation rentals are prohibited in all residential districts.")
+        ).subjects
+        assert SubjectMatter.PROHIBITION in subjects
+
+
+class TestNothingIsSilentlyDropped:
+    """The property the module exists for."""
+
+    def test_normative_text_with_no_known_subject_surfaces(self, extractor):
+        result = _extract(
+            extractor,
+            "Operators shall maintain harmonious aesthetic congruity with neighborhood character.",
+        )
+        assert result.obligations == ()
+        assert len(result.unclassified) == 1
+
+    def test_such_a_result_is_not_complete(self, extractor):
+        result = _extract(extractor, "Operators shall preserve the ineffable character of the block.")
+        assert result.is_complete is False
+
+    def test_a_fully_understood_ordinance_is_complete(self, extractor):
+        result = _extract(extractor, "Each vacation rental shall provide one parking space.")
+        assert result.is_complete is True
+
+    def test_a_partial_read_is_flagged_even_when_something_was_extracted(self, extractor):
+        """The dangerous case: one clause parsed, another missed. Getting
+        *an* answer must not imply getting *the* answer."""
+        result = _extract(
+            extractor,
+            "Each vacation rental shall provide one off-street parking space. "
+            "Operators shall maintain harmonious aesthetic congruity.",
+        )
+        assert len(result.obligations) == 1
+        assert result.is_complete is False
+
+    def test_non_normative_text_is_ignored_not_flagged(self, extractor):
+        """A definitions clause isn't an unparsed obligation."""
+        result = _extract(extractor, 'For purposes of this chapter, "dwelling unit" has its ordinary meaning.')
+        assert result.unclassified == ()
+        assert result.ignored_sentences >= 1
+
+
+class TestAdoptionDate:
+    def test_iso_format(self, extractor):
+        result = _extract(extractor, "No unit may be rented more than 90 nights. Adopted 2019-03-12.")
+        assert _only(result).adopted_date == date(2019, 3, 12)
+
+    def test_long_form_with_capital_a(self, extractor):
+        """Real ordinances capitalise it. A case-sensitive pattern misses
+        the date and silently downgrades a decidable grandfathering
+        question to UNDETERMINED."""
+        result = _extract(extractor, "No unit may be rented more than 90 nights. Adopted March 12, 2019.")
+        assert _only(result).adopted_date == date(2019, 3, 12)
+
+    def test_absent_date_stays_none(self, extractor):
+        result = _extract(extractor, "No unit may be rented more than 90 nights.")
+        assert _only(result).adopted_date is None
+
+
+class TestCanonicalFormAndGate:
+    def test_canonical_form_summarises_structure(self, extractor):
+        result = _extract(extractor, "No unit may be rented more than 90 nights in any calendar year.")
+        assert result.canonical_form() == "prohibition:frequency"
+
+    def test_canonical_form_of_an_empty_result(self, extractor):
+        assert _extract(extractor, "The sky is blue.").canonical_form() == "(none)"
+
+    def test_a_deterministic_extractor_always_agrees_with_itself(self, extractor):
+        """True and unremarkable — which is the point. Agreement means
+        stable, not correct, and a deterministic extractor is trivially
+        stable even when wrong."""
+        result, agreed = sample_and_gate(
+            extractor,
+            "No unit may be rented more than 90 nights in any calendar year.",
+            "§ 1",
+            JurisdictionTier.MUNICIPAL,
+            FL_PATH,
+        )
+        assert agreed is True
+        assert result.canonical_form() == "prohibition:frequency"
+
+    def test_the_gate_rejects_an_unfireable_threshold(self, extractor):
+        """Inherited from SemanticEntropyGate: a threshold at or above
+        log(N) could never fire, and is refused at construction."""
+        with pytest.raises(ValueError, match="cannot fire"):
+            sample_and_gate(
+                extractor, "No unit may be rented more than 90 nights.", "§ 1",
+                JurisdictionTier.MUNICIPAL, FL_PATH, samples=5, entropy_threshold=8.5,
+            )
+
+
+class TestLlmBackendFailsClosed:
+    def test_it_refuses_without_a_client(self):
+        """No model is wired into this codebase. Same honesty category as
+        SmtpEmailSender and the KMS signers — real dispatch shape, round
+        trip unverified."""
+        with pytest.raises(NotImplementedError, match="no model is configured"):
+            LlmObligationExtractor(model="some-model").extract(
+                "text", "§ 1", JurisdictionTier.MUNICIPAL, FL_PATH
+            )
+
+    def test_it_parses_a_stubbed_response(self):
+        """The parsing path is testable even though the round trip isn't."""
+
+        class _Stub:
+            def extract_obligations(self, text, schema):
+                return {
+                    "obligations": [
+                        {"text": text, "modality": "prohibition", "subjects": ["frequency"]}
+                    ]
+                }
+
+        result = LlmObligationExtractor(model="m", client=_Stub()).extract(
+            "No unit may be rented more than 90 nights.", "§ 1", JurisdictionTier.MUNICIPAL, FL_PATH
+        )
+        assert _only(result).subjects == frozenset({SubjectMatter.FREQUENCY})
+        assert _only(result).modality is Modality.PROHIBITION
+
+
+class TestEndToEnd:
+    """Prose in, preemption verdict out — the whole point of Layer 0."""
+
+    @pytest.mark.parametrize(
+        ("text", "path", "expected"),
+        [
+            (
+                (
+                    "No dwelling unit may be rented as a vacation rental for more than 90 "
+                    "nights in any calendar year. Adopted March 12, 2019."
+                ),
+                FL_PATH,
+                PreemptionStatus.PREEMPTED,
+            ),
+            (
+                (
+                    "No dwelling unit may be rented as a vacation rental for more than 120 "
+                    "nights in any calendar year. Adopted May 4, 2010."
+                ),
+                FL_PATH,
+                PreemptionStatus.GRANDFATHERED,
+            ),
+            (
+                (
+                    "Each vacation rental shall provide one off-street parking space per "
+                    "bedroom. Adopted September 8, 2021."
+                ),
+                FL_PATH,
+                PreemptionStatus.NOT_IN_SCOPE,
+            ),
+            (
+                "No vacation rental may be let more than 26 times per calendar year.",
+                FL_PATH,
+                PreemptionStatus.UNDETERMINED,
+            ),
+            (
+                (
+                    "No dwelling unit may be rented as a short-term rental for more than 60 "
+                    "nights in any calendar year. Adopted April 1, 2020."
+                ),
+                ("United States", "Arizona", "City of Elsewhere"),
+                PreemptionStatus.OUTSIDE_JURISDICTION,
+            ),
+        ],
+        ids=["preempted", "grandfathered", "out-of-scope", "undetermined", "wrong-state"],
+    )
+    def test_raw_text_reaches_the_right_verdict(self, extractor, text, path, expected):
+        result = _extract(extractor, text, citation="§ X", path=path)
+        assert analyze(_only(result), FL_RULE).status is expected
