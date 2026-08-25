@@ -664,6 +664,48 @@ git history on `knowledge_graph/embeddings.py` for what that surfaced). `api` an
 deployment-role extras (a library-only user shouldn't need FastAPI or Celery pulled in) rather
 than lazy-backend extras; CI installs both to cover their tests.
 
+### The coverage number, measured properly
+
+A ten-document held-out set — North Carolina's Vacation Rental Act (five articles), four sections of
+Minnesota's lodging chapter, and Maine's lodging definitions. **121 normative provisions, three
+states, none seen while building or tuning.** Measured before any fixes, and no fixes were made
+after.
+
+| Corpus | Provisions | Coverage |
+|---|---:|---:|
+| Florida ch. 509 — **tuned against** | 107 | **93.1%** |
+| Arizona § 9-500.39 — held out, then fixed against | 21 | 66.7% |
+| **This held-out set — never touched** | **121** | **34.7%** |
+
+The honest figure for unseen text is around **35%**, not 93%. Every number previously reported here
+was measured on text the extractor had been tuned against.
+
+**Why it collapses is more useful than the number.** The failures are not vocabulary gaps:
+
+- *"A landlord or real estate broker and tenant shall execute a vacation rental agreement"*
+- *"No vacation rental agreement shall be valid and enforceable unless the tenant has accepted"*
+- *"These payments deposited in a trust account shall not earn interest unless…"*
+- *"No innkeeper who has in the establishment a fireproof safe…"*
+
+That is **contract law and bailment law**, not regulatory law. `SubjectMatter` was built from
+Florida's *public regulatory* scheme — permits, sanitation, zoning, fire safety — and North
+Carolina's Vacation Rental Act governs the private agreement between landlord and tenant, while
+Minnesota § 327.71 governs an innkeeper's liability for a guest's property.
+
+So the conclusion that matters: **"short-term rental law" is not one legal area.** It is at least
+three — regulatory, contractual, and liability — and this taxonomy covers one. That is a
+categorically bigger gap than the "add four more subjects" pattern of the previous two rounds, and
+no amount of incremental subject-adding closes it. It needs a decision about scope, not a patch.
+
+**A measurement bug worth recording**, since it ran in the flattering direction's opposite: the
+first pass reported **16.7%**, because the section anchors matched *"Reserved for future
+codification purposes"* near the end of three documents and extracted only a fragment. Corrected
+anchors gave 34.7%. Measurement error is not always optimistic, and a bad harness had understated
+real performance by half. Both directions need checking.
+
+Corpora are reproducible from their sources (ncleg.gov, revisor.mn.gov, legislature.maine.gov — all
+permit this crawler) and no fetched text is committed.
+
 ### Held-out validation: what the tuned number was worth
 
 Added in v1.19.0. The 93.1% reported previously was measured on a corpus that had then been tuned
@@ -705,10 +747,11 @@ duty that merely names the city. Anchoring on the bare word would have reassigne
 emptied the operator's obligation list — the silent-drop failure wearing a different hat. The
 pattern requires the polity to be the subject of the modal, and there's a test for it.
 
-**The pattern across three corpora**, which is the transferable result: each new body of text
-reveals a bearer or subject class the previous one didn't need, and coverage measured on tuned text
-runs roughly 25 points optimistic. Expect both to continue. A coverage claim about this extractor is
-only meaningful with the corpus named and its tuning status stated.
+**The pattern across three corpora** — superseded by the ten-document set above, and left here
+because the correction is the point: this originally read that each new corpus needs "a bearer or
+subject class the previous one didn't need," and that tuned coverage runs ~25 points optimistic.
+The first half was too optimistic about the *kind* of gap, and the second half understated the
+size. A wider sample showed the real gap is whole areas of law, and the real drop is ~58 points.
 
 **What this still isn't**: 71.4% is now also a tuned number, since Arizona has been fixed against.
 The next honest measurement needs a third corpus nobody has touched.
