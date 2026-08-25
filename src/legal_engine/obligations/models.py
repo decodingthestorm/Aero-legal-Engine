@@ -52,6 +52,20 @@ class SubjectMatter(str, Enum):
     out a diagram; a taxonomy that tried to cover all of law in advance
     would be wrong everywhere instead of right somewhere.
 
+    **Scope: public regulatory law.** Licensing, inspection, sanitation,
+    zoning, safety, fees, enforcement — what an authority requires of a
+    regulated party. It deliberately does **not** cover contract law or
+    liability law, and scores near zero on both. Measured against North
+    Carolina's Vacation Rental Act (landlord–tenant agreements, trust
+    accounts, security deposits) and Minnesota § 327.71 (an innkeeper's
+    liability for a guest's property), coverage was 0–20%. Those are not
+    bugs. "Short-term rental law" is at least three areas of law —
+    regulatory, contractual, liability — and this covers the first.
+
+    A 0% score on a lease is the taxonomy working as scoped. Read it as a
+    defect and you will add subjects that make every other measurement
+    less meaningful.
+
     **Known limit — one enum, now two domains.** This was documented as
     narrow and STR-specific until employment subjects were added, and at
     two domains a single enum with labelled sections is still the

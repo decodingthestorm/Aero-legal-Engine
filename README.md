@@ -664,6 +664,43 @@ git history on `knowledge_graph/embeddings.py` for what that surfaced). `api` an
 deployment-role extras (a library-only user shouldn't need FastAPI or Celery pulled in) rather
 than lazy-backend extras; CI installs both to cover their tests.
 
+### Scoped to regulatory compliance: the number that matters
+
+The 34.7% figure below mixes three areas of law. Scoped to **public regulatory law** — what this
+taxonomy was actually built for — and measured on nine held-out documents from Maine and Minnesota
+(licensing, issuance, rulemaking, inspection, penalties, exemptions), the figure is **67.0%** across
+94 provisions.
+
+The result worth more than the number is that **two independent held-out measurements converged**:
+
+| Held-out regulatory corpus | Provisions | Coverage |
+|---|---:|---:|
+| Arizona A.R.S. § 9-500.39 | 21 | 66.7% |
+| Maine + Minnesota, 9 documents | 94 | **67.0%** |
+
+Different states, different drafters, measured at different points in the build, neither tuned
+against at the time. **~67% is a stable estimate for regulatory text, not noise** — which is the
+first coverage figure in this repository that doesn't need an asterisk.
+
+For contrast, the same extractor on the same held-out method:
+
+| Corpus | Coverage |
+|---|---:|
+| Florida ch. 509 — tuned against | 93.1% |
+| **Regulatory, held out** | **67.0%** |
+| Mixed (incl. contract + bailment) | 34.7% |
+| Contract law (NC 42A) / bailment (MN 327.71) alone | 0–20% |
+
+Per-document variance is real: 16.7%–90.0%, median 50%. Sections dense with licensing and penalty
+language score near 90%; sections that wander into adjacent areas — youth-camp medical
+administration, estate succession — drag it down, and for the same reason contract law does.
+
+**What 67% means in practice.** A third of regulatory provisions still come back unclassified — and
+the system *says so* rather than dropping them silently. That is the honest product claim: not
+"complete", but "here is what I read, here is what I could not, and here is why each determination
+follows." A tool that reports its own blind spots is usable by a professional; one that hides them
+is not.
+
 ### The coverage number, measured properly
 
 A ten-document held-out set — North Carolina's Vacation Rental Act (five articles), four sections of
