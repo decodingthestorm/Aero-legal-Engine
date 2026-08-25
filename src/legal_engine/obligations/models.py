@@ -84,7 +84,11 @@ class SubjectMatter(str, Enum):
     # in the taxonomy — a model constrained to this schema has nowhere to
     # put "wastewater shall be properly treated" either.
     SANITATION = "sanitation"
-    """Sewage, wastewater, vermin, potable water, food-borne illness."""
+    """Sewage, wastewater, vermin, potable water, food-borne illness, and
+    linen hygiene. Bedding is here rather than in a subject of its own:
+    "sheets shall be laundered before use by another guest" is a hygiene
+    rule, and a LINENS subject would be lodging-specific in a way nothing
+    else in this taxonomy is."""
 
     FIRE_SAFETY = "fire_safety"
     """Substantive life-safety requirements, as distinct from
@@ -95,7 +99,30 @@ class SubjectMatter(str, Enum):
     """Authority to adopt rules — almost always borne by the regulator."""
 
     RECORDKEEPING = "recordkeeping"
-    """Records, reports, and the deadlines attached to them."""
+    """Records, reports, filings, and the deadlines attached to them."""
+
+    # A second measured round. Each of these generalises beyond lodging
+    # law, which is the test applied before adding one: "linens" appears
+    # repeatedly in ch. 509 and was *not* added, because a subject that
+    # only ever fires on hotel statutes is overfitting to the corpus that
+    # produced it rather than a category of regulation.
+    ENFORCEMENT = "enforcement"
+    """Sanctions, revocation, stop-orders, referral to law enforcement.
+    Distinct from FEES: a fine is a sum of money, an enforcement action
+    is a power the regulator exercises."""
+
+    ADMINISTRATIVE_PROCEDURE = "administrative_procedure"
+    """Variances, appeals, notice, hearings — how a decision gets made
+    rather than what it decides. Present in essentially every regulatory
+    statute."""
+
+    HABITABILITY = "habitability"
+    """Light, heat, ventilation, water — the conditions that make a
+    dwelling fit to occupy."""
+
+    BUILDING_STANDARDS = "building_standards"
+    """Structural requirements: railings, stairways, egress construction.
+    Distinct from FIRE_SAFETY, which is about a specific hazard."""
     PROPERTY_VALUATION = "property_valuation"
     """Present because Fla. Stat. § 509.032(7)(c) carves it out — a
     reminder that the taxonomy is driven by what statutes actually

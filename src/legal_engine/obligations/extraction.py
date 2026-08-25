@@ -86,6 +86,10 @@ _SUBJECT_PATTERNS: tuple[tuple[SubjectMatter, str], ...] = (
             r"\bsewage\b|\bwastewater\b|\bvermin\b|\bsanitar|\bsanitation\b"
             r"|\bbathroom|\btoilet|\bplumbing\b|\bgarbage\b|\brefuse\b"
             r"|\bfood-?borne\b|\bpotable\b|\bdisinfect|\bfumigat"
+            # Linen hygiene lives here rather than in a lodging-specific
+            # subject — see SubjectMatter.SANITATION.
+            r"|\bpillowslips?\b|\bsheets?\b|\bbedding\b|\blaundered\b|\bmattress"
+            r"|\bcontagious\b|\bcommunicable disease\b|\bpublic health risk\b"
         ),
     ),
     (
@@ -99,7 +103,40 @@ _SUBJECT_PATTERNS: tuple[tuple[SubjectMatter, str], ...] = (
     (SubjectMatter.RULEMAKING, r"\badopt(?:s|ed)? (?:such )?rules?\b|\bby rule\b|\brulemaking\b"),
     (
         SubjectMatter.RECORDKEEPING,
-        r"\brecords?\b|\breports?\b|\bshall be submitted\b|\bmaintain a (?:log|register)\b",
+        (
+            r"\brecords?\b|\breports?\b|\bshall be submitted\b|\bmaintain a (?:log|register)\b"
+            r"|\bfiled with\b|\battest in writing\b|\bprovide .{0,30}documentation\b"
+            r"|\bonline (?:account|system)\b"
+        ),
+    ),
+    (
+        SubjectMatter.ENFORCEMENT,
+        (
+            r"\badministrative sanctions?\b|\bstop the sale\b|\bstop-sale\b"
+            r"|\brevoke|\bsuspend(?:ed|sion)?\b|\benforce(?:ment|s|d)?\b"
+            r"|\blaw enforcement\b|\bproper destruction\b"
+        ),
+    ),
+    (
+        SubjectMatter.ADMINISTRATIVE_PROCEDURE,
+        (
+            r"\bvariance(?:s)?\b|\bappeal(?:s|ed)?\b|\bhearing\b"
+            r"|\badvisory council\b|\bnotification may be\b|\bupon request by\b"
+        ),
+    ),
+    (
+        SubjectMatter.HABITABILITY,
+        (
+            r"\bventilat|\blight(?:ed|ing)\b|\bheated\b|\bcooled\b|\bair changes?\b"
+            r"|\bwindow opening\b|\bopening to the outside\b"
+        ),
+    ),
+    (
+        SubjectMatter.BUILDING_STANDARDS,
+        (
+            r"\brailings?\b|\bbalcon(?:y|ies)\b|\bstairways?\b|\bplatforms?\b"
+            r"|\bconstruction standards?\b|\bFlorida Building Code\b|\bstories in height\b"
+        ),
     ),
 )
 

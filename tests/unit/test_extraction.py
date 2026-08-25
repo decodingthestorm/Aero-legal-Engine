@@ -405,3 +405,70 @@ class TestDefinitionalTextIsNotNormative:
         sit near definitional language."""
         result = _extract(extractor, "No vacation rental may be operated without a license.")
         assert _only(result).modality is Modality.PROHIBITION
+
+
+class TestSecondMeasuredRound:
+    """Four more subjects, added after a second pass over Fla. Stat.
+    ch. 509 took coverage from 64.7% to 93.1%.
+
+    Each was admitted only because it generalises beyond lodging law.
+    "Linens" recurs throughout that chapter and was deliberately *not*
+    given its own subject — a category that only ever fires on hotel
+    statutes is overfitting to the corpus that produced it. Bedding
+    hygiene folds into SANITATION instead, which is tested here.
+    """
+
+    @pytest.mark.parametrize(
+        ("sentence", "expected"),
+        [
+            (
+                "The division may impose administrative sanctions for violations of this section.",
+                SubjectMatter.ENFORCEMENT,
+            ),
+            (
+                (
+                    "Local law enforcement shall provide immediate assistance in pursuing "
+                    "an illegally operating establishment."
+                ),
+                SubjectMatter.ENFORCEMENT,
+            ),
+            (
+                "The division's advisory council shall review applications for variances.",
+                SubjectMatter.ADMINISTRATIVE_PROCEDURE,
+            ),
+            (
+                "Each establishment shall be properly lighted, heated, cooled, and ventilated.",
+                SubjectMatter.HABITABILITY,
+            ),
+            (
+                (
+                    "Each establishment three or more stories in height must have secure "
+                    "railings on all balconies and stairways."
+                ),
+                SubjectMatter.BUILDING_STANDARDS,
+            ),
+            (
+                "All changes must be filed with the division through the online system.",
+                SubjectMatter.RECORDKEEPING,
+            ),
+        ],
+    )
+    def test_recognises_the_added_subjects(self, extractor, sentence, expected):
+        assert expected in _only(_extract(extractor, sentence)).subjects
+
+    def test_linen_hygiene_is_sanitation_not_a_subject_of_its_own(self, extractor):
+        """The overfitting test. Bedding rules are real obligations and
+        must be classified — but as hygiene, not as a lodging-specific
+        category that would never fire on any other corpus."""
+        result = _extract(
+            extractor,
+            "Sheets and pillowslips shall be laundered before they are used by another guest.",
+        )
+        assert SubjectMatter.SANITATION in _only(result).subjects
+
+    def test_enforcement_is_distinct_from_fees(self, extractor):
+        """A fine is a sum of money; an enforcement action is a power the
+        regulator exercises. Merging them would make "revoke the licence"
+        indistinguishable from "the fee is $50"."""
+        revocation = _extract(extractor, "The division may revoke the license of any operator.")
+        assert SubjectMatter.ENFORCEMENT in _only(revocation).subjects

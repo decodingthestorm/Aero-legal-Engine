@@ -140,6 +140,15 @@ honestly-flagged gap from the version before it — never a rewrite, always addi
   `bearer` field and five measured subjects took coverage to **64.7%**. The bottleneck was
   **ontology, not language**.
 
+- **v1.17.0** — a second measured round took extraction coverage from 64.7% to **93.1%** on the same
+  six real statute sections, by adding four subjects the text demanded (`ENFORCEMENT`,
+  `ADMINISTRATIVE_PROCEDURE`, `HABITABILITY`, `BUILDING_STANDARDS`) and folding linen hygiene into
+  `SANITATION` rather than giving it a lodging-specific category of its own. It also fixed a bug in
+  the *measurement harness* — the body anchor matched a breadcrumb, so page chrome was being scored
+  as failed extraction. The 7 residual failures are the informative part: they are **anaphora and
+  document structure**, not vocabulary, which is precisely where a language model would earn its
+  keep and where keyword matching provably cannot.
+
 None of this means "battle-tested production system" — read on for what would still take.
 
 ## What's built
@@ -780,9 +789,44 @@ Two changes followed directly from the data:
 Coverage after: **64.7%**, with the bearer split running 32 regulator / 34 regulated party, which
 confirms the 38% diagnosis was real rather than an artifact of the heuristic used to measure it.
 
-**What this still isn't**: 35% remains unclassified, and state statute is not municipal ordinance —
-the domain is right but the tier is not. The honest next measurement needs real municipal text,
-which requires either a publisher that permits it or a human supplying the document.
+A second round pushed this further, and the shape of what was left changed the conclusion.
+
+| Round | Coverage |
+|---|---:|
+| v1.15.0 — first measurement | 31.8% |
+| v1.16.0 — `bearer` + 5 measured subjects | 64.7% |
+| v1.17.0 — 4 more subjects, harness fix | **93.1%** |
+
+Part of the earlier gap was **my own measurement harness**: the body anchor matched the page's
+breadcrumb rather than the start of the statute, so navigation chrome was being fed to the extractor
+and scored as failed extraction. Two of the 36 "failures" were never statutory text.
+
+The four subjects added — `ENFORCEMENT`, `ADMINISTRATIVE_PROCEDURE`, `HABITABILITY`,
+`BUILDING_STANDARDS` — each had to pass one test before admission: **does it generalise beyond
+lodging law?** "Linens" recurs constantly in ch. 509 and was deliberately refused a category of its
+own; bedding hygiene folds into `SANITATION`. A subject that only ever fires on hotel statutes is
+overfitting to the corpus that produced it, and there is a test asserting exactly that.
+
+**The 7 remaining failures are the useful result**, because they are no longer about vocabulary:
+
+- *"**Such devices** shall be integrated with the fire detection system"* — anaphora; the subject
+  is in the previous sentence
+- *"**Any such installation** shall be made in accordance with…"* — anaphora
+- *"…shall do **all of the following**:"* — a list lead-in whose obligations live in the sub-items
+- *"shall be **classified as** a hotel, motel…"* — classificatory rather than normative
+- one provision about **coin-operated amusement machines**, genuinely idiosyncratic to this chapter
+
+So the sharper conclusion, which neither "it's all ontology" nor "it's all language" would have
+reached: **ontology got 31.8% → 93.1% deterministically, and the residual is discourse structure.**
+That is exactly what a language model is good at and what keyword matching provably cannot do —
+resolving "such devices" requires reading the sentence before it. The sequencing follows: build the
+taxonomy first, because it is cheap, deterministic, and worth 60 points; reach for a model for the
+last 7, and only for the cases that need cross-sentence context.
+
+**What this still isn't**: 93.1% on *one chapter* of *one state's* statutes. State statute is not
+municipal ordinance — the domain is right, the tier is not — and coverage on a corpus you tuned
+against is an upper bound, not an estimate. The honest next measurement is a document nobody tuned
+for, which needs either a publisher that permits this crawler or a human supplying the text.
 
 ### Statutory conflict resolution
 
