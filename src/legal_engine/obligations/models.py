@@ -183,6 +183,23 @@ class Bearer(str, Enum):
     REGULATOR = "regulator"
     """An agency, division, or department acting under the statute."""
 
+    SUBORDINATE_LEGISLATURE = "subordinate_legislature"
+    """A city, town, county, or other law-making body below the enacting
+    authority.
+
+    Found the same way REGULATOR was — by measuring. Against A.R.S.
+    § 9-500.39, held out and never tuned against, **five of seven**
+    unclassified provisions were directed at a city or town, including
+    the headline sentence of the entire statute: "A city or town may not
+    prohibit vacation rentals."
+
+    It is a genuinely distinct bearer, not a variant of REGULATOR. An
+    agency administers a statute; a subordinate legislature *makes rules*
+    under one. Provisions binding it regulate rule-making rather than
+    conduct, which is what a preemption statute mostly consists of — so a
+    model that cannot express this bearer cannot represent the very
+    documents this system exists to read."""
+
     UNSPECIFIED = "unspecified"
 
 

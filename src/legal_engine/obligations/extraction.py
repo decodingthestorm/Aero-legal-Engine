@@ -148,6 +148,22 @@ _REGULATOR = re.compile(
     r"\bthe (?:division|department|agency|secretary|commission|board)\b", re.IGNORECASE
 )
 
+# A city or town is not an agency. Held-out measurement against A.R.S.
+# § 9-500.39 put five of seven unclassified provisions in this class,
+# including the statute's headline sentence.
+#
+# The polity must be the *subject of the modal*, not merely mentioned.
+# "Every rental shall register with the city" is a duty on the operator
+# that happens to name the city as recipient; anchoring on the bare word
+# would reassign it and quietly empty the operator's obligation list.
+_SUBORDINATE_LEGISLATURE = re.compile(
+    r"^\s*(?:a|the|any)?\s*"
+    r"(?:city|town|county|municipality|local government|political subdivision)"
+    r"(?:\s+or\s+town)?"
+    r"[^.]{0,60}?\b(?:may|shall|must)\b",
+    re.IGNORECASE,
+)
+
 # Definitional and descriptive text borrows deontic vocabulary without
 # imposing a duty: "any facility that may not be classified as a hotel"
 # is a definition, not a prohibition. Checked before modality, because
@@ -169,7 +185,14 @@ _OUTRIGHT_BAN = re.compile(
     r"\b(?:are|is)\s+prohibited\b"
     r"|\bshall not be (?:permitted|allowed|operated)\b"
     r"|\bmay not (?:be )?(?:operate|be operated|be established)\b"
-    r"|\bprohibited in\b",
+    r"|\bprohibited in\b"
+    # "A city or town may not prohibit vacation rentals" is *about*
+    # prohibition — a rule governing whether bans may exist at all.
+    # Missing it left the headline provision of an entire preemption
+    # statute unclassified.
+    r"|\bmay not prohibit\b"
+    r"|\bshall not prohibit\b"
+    r"|\bmay not (?:restrict|ban)\b",
     re.IGNORECASE,
 )
 
@@ -484,7 +507,11 @@ def _classify_bearer(sentence: str) -> Bearer:
     assumed to bind the regulated party, which is the reading that makes
     an unattributed "shall provide parking" mean what it obviously
     means."""
-    return Bearer.REGULATOR if _REGULATOR.search(sentence) else Bearer.REGULATED_PARTY
+    if _SUBORDINATE_LEGISLATURE.search(sentence):
+        return Bearer.SUBORDINATE_LEGISLATURE
+    if _REGULATOR.search(sentence):
+        return Bearer.REGULATOR
+    return Bearer.REGULATED_PARTY
 
 
 def _classify_subjects(sentence: str) -> set[SubjectMatter]:

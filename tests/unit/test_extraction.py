@@ -472,3 +472,53 @@ class TestSecondMeasuredRound:
         indistinguishable from "the fee is $50"."""
         revocation = _extract(extractor, "The division may revoke the license of any operator.")
         assert SubjectMatter.ENFORCEMENT in _only(revocation).subjects
+
+
+class TestSubordinateLegislatureBearer:
+    """A third bearer class, found by held-out measurement.
+
+    Against A.R.S. § 9-500.39 — fetched after the extractor was already
+    tuned on Florida, and never tuned against — five of seven unclassified
+    provisions were directed at a city or town rather than at an operator
+    or an agency. That included the headline sentence of the entire
+    statute.
+
+    It is genuinely distinct from REGULATOR: an agency *administers* a
+    statute, a subordinate legislature *makes rules* under one. Preemption
+    statutes consist mostly of provisions binding the second, so a model
+    without this bearer cannot represent the documents this system exists
+    to read.
+    """
+
+    def test_a_duty_on_a_city_is_borne_by_the_subordinate_legislature(self, extractor):
+        result = _extract(
+            extractor, "A city or town may not prohibit vacation rentals or short-term rentals."
+        )
+        assert _only(result).bearer is Bearer.SUBORDINATE_LEGISLATURE
+
+    @pytest.mark.parametrize(
+        "sentence",
+        [
+            "A county may not restrict the use of short-term rentals.",
+            "The municipality shall not impose additional occupancy limits.",
+            "A city or town may regulate noise under this section.",
+        ],
+    )
+    def test_polity_phrasings(self, extractor, sentence):
+        assert _only(_extract(extractor, sentence)).bearer is Bearer.SUBORDINATE_LEGISLATURE
+
+    def test_a_city_merely_named_as_recipient_does_not_take_the_duty(self, extractor):
+        """The false positive that would have done real damage. "register
+        with the city" is an operator's duty that happens to name the city.
+        Anchoring on the bare word would reassign it and quietly empty the
+        operator's obligation list — the silent-drop failure wearing a
+        different hat."""
+        result = _extract(extractor, "Every vacation rental shall register annually with the city.")
+        assert _only(result).bearer is Bearer.REGULATED_PARTY
+
+    def test_prohibiting_prohibition_is_about_prohibition(self, extractor):
+        """"A city may not prohibit X" is a rule about whether bans may
+        exist. Its subject is the ban itself. Missing this left the single
+        most important sentence of a preemption statute unclassified."""
+        result = _extract(extractor, "A city or town may not prohibit vacation rentals.")
+        assert SubjectMatter.PROHIBITION in _only(result).subjects

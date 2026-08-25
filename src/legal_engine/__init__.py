@@ -1,3 +1,3 @@
 """Legal Engine Platform: legal ingestion, formal verification, and game-theoretic statutory optimization."""
 
-__version__ = "1.18.0"
+__version__ = "1.19.0"

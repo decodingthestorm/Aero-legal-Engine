@@ -156,6 +156,13 @@ honestly-flagged gap from the version before it — never a rewrite, always addi
   `authority.py` holds the preliminaries both share, and `express_preemption` was refactored onto it
   with all 27 of its tests unchanged.
 
+- **v1.19.0** — held-out validation, and the correction it forced. Extraction scored **66.7%** on
+  Arizona's short-term-rental statute, never seen and never tuned against, versus **93.1%** on the
+  Florida corpus it *was* tuned on. **The tuned number was 26 points optimistic.** Diagnosis found a
+  third bearer class — duties on a *subordinate legislature*, which is what a preemption statute
+  mostly consists of — and fixing it recovered only 5 points, because bearer and subject are
+  independent requirements and a provision needs both.
+
 None of this means "battle-tested production system" — read on for what would still take.
 
 ## What's built
@@ -656,6 +663,55 @@ one of those "optional" dependencies turned out to already be installed in a bro
 git history on `knowledge_graph/embeddings.py` for what that surfaced). `api` and `workers` are
 deployment-role extras (a library-only user shouldn't need FastAPI or Celery pulled in) rather
 than lazy-backend extras; CI installs both to cover their tests.
+
+### Held-out validation: what the tuned number was worth
+
+Added in v1.19.0. The 93.1% reported previously was measured on a corpus that had then been tuned
+against, which makes it an upper bound rather than an estimate. This is the correction.
+
+**Arizona A.R.S. § 9-500.39**, fetched from `azleg.gov` (whose robots.txt permits it with a
+120-second crawl delay, honoured), was never seen while the extractor was being built:
+
+| Corpus | Coverage |
+|---|---:|
+| Florida ch. 509 — tuned against | 93.1% |
+| **Arizona § 9-500.39 — held out** | **66.7%** |
+
+**A 26-point gap.** That is the honest size of the overfitting, and it is roughly what a
+tuned-on-the-test-set number usually costs.
+
+The statute is also *structurally* different in a way worth recording. Florida reserves a specific
+list to the state and leaves everything else to localities; Arizona forbids local regulation
+generally **except** an enumerated list of permitted subjects. Denylist versus allowlist — and the
+defaults are opposite, which means `ExpressPreemptionRule.reserved_subjects` cannot express Arizona
+safely. Enumerating "everything except the permitted list" would be wrong the moment a new subject
+is added to an open taxonomy, because it would default to *surviving* when Arizona says it should
+default to *falling*. That is a third doctrinal shape, and it is not modelled.
+
+**The diagnosis, and why fixing it barely helped.** Five of seven failures were directed at a *city
+or town* — a bearer the model didn't have. `Bearer.SUBORDINATE_LEGISLATURE` is genuinely distinct
+from `REGULATOR`: an agency *administers* a statute, a subordinate legislature *makes rules* under
+one, and preemption statutes consist mostly of the latter. The miss included the headline sentence
+of the whole statute — *"A city or town may not prohibit vacation rentals"* — which went
+unclassified.
+
+Adding it moved coverage from 66.7% to **71.4%**. Only five points, and the reason is the useful
+part: **bearer and subject are independent requirements.** Naming the right bearer doesn't classify
+a provision that still has no subject. The diagnosis was correct about the *class* of failure and
+correct that it mattered, and fixing it still didn't move the number much.
+
+One false positive was worth guarding carefully: *"register **with** the city"* is an operator's
+duty that merely names the city. Anchoring on the bare word would have reassigned it and quietly
+emptied the operator's obligation list — the silent-drop failure wearing a different hat. The
+pattern requires the polity to be the subject of the modal, and there's a test for it.
+
+**The pattern across three corpora**, which is the transferable result: each new body of text
+reveals a bearer or subject class the previous one didn't need, and coverage measured on tuned text
+runs roughly 25 points optimistic. Expect both to continue. A coverage claim about this extractor is
+only meaningful with the corpus named and its tuning status stated.
+
+**What this still isn't**: 71.4% is now also a tuned number, since Arizona has been fixed against.
+The next honest measurement needs a third corpus nobody has touched.
 
 ### Floors, and why there are two doctrines
 
