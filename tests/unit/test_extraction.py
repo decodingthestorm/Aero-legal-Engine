@@ -29,7 +29,7 @@ from legal_engine.obligations.extraction import (
     LlmObligationExtractor,
     sample_and_gate,
 )
-from legal_engine.obligations.models import Modality, SubjectMatter
+from legal_engine.obligations.models import Bearer, Modality, SubjectMatter
 
 FL_PATH = ("United States", "Florida", "City of Example")
 
@@ -204,7 +204,7 @@ class TestAdoptionDate:
 class TestCanonicalFormAndGate:
     def test_canonical_form_summarises_structure(self, extractor):
         result = _extract(extractor, "No unit may be rented more than 90 nights in any calendar year.")
-        assert result.canonical_form() == "prohibition:frequency"
+        assert result.canonical_form() == "regulated_party/prohibition:frequency"
 
     def test_canonical_form_of_an_empty_result(self, extractor):
         assert _extract(extractor, "The sky is blue.").canonical_form() == "(none)"
@@ -221,7 +221,7 @@ class TestCanonicalFormAndGate:
             FL_PATH,
         )
         assert agreed is True
-        assert result.canonical_form() == "prohibition:frequency"
+        assert result.canonical_form() == "regulated_party/prohibition:frequency"
 
     def test_the_gate_rejects_an_unfireable_threshold(self, extractor):
         """Inherited from SemanticEntropyGate: a threshold at or above
@@ -310,3 +310,98 @@ class TestEndToEnd:
     def test_raw_text_reaches_the_right_verdict(self, extractor, text, path, expected):
         result = _extract(extractor, text, citation="§ X", path=path)
         assert analyze(_only(result), FL_RULE).status is expected
+
+
+class TestBearer:
+    """Who the duty falls on.
+
+    Added because measuring against six real sections of Fla. Stat.
+    ch. 509 showed the single largest cause of unclassified provisions —
+    38% — was duties on the *agency*. Those weren't parsing failures;
+    the schema had nowhere to put them.
+    """
+
+    def test_an_agency_duty_is_borne_by_the_regulator(self, extractor):
+        result = _extract(extractor, "The division shall adopt such rules as are necessary.")
+        assert _only(result).bearer is Bearer.REGULATOR
+
+    @pytest.mark.parametrize(
+        "sentence",
+        [
+            "The department shall inspect each licensed establishment twice annually.",
+            "The agency may establish by rule a schedule of fees.",
+            "The commission shall maintain records of every complaint received.",
+        ],
+    )
+    def test_agency_phrasings(self, extractor, sentence):
+        assert _only(_extract(extractor, sentence)).bearer is Bearer.REGULATOR
+
+    def test_an_unattributed_duty_binds_the_regulated_party(self, extractor):
+        """"shall provide parking" with no named actor obviously binds the
+        operator — defaulting the other way would misfile most of an
+        ordinance."""
+        result = _extract(extractor, "Each vacation rental shall provide one parking space.")
+        assert _only(result).bearer is Bearer.REGULATED_PARTY
+
+    def test_bearer_is_part_of_the_canonical_form(self, extractor):
+        """Two extractions that disagree about *who owes the duty* are not
+        the same extraction, and the agreement gate has to see that."""
+        agency = _extract(extractor, "The division shall maintain records of each inspection.")
+        operator = _extract(extractor, "The operator shall maintain records of each inspection.")
+        assert agency.canonical_form() != operator.canonical_form()
+
+
+class TestSubjectsAddedFromMeasurement:
+    """Five subjects added because real statutory text needed them, not
+    because they seemed tidy. Roughly a third of unclassified provisions
+    failed for want of a subject rather than for want of parsing — a gap
+    no amount of language understanding fills."""
+
+    @pytest.mark.parametrize(
+        ("sentence", "expected"),
+        [
+            (
+                (
+                    "Wastewater or sewage shall be properly treated onsite or discharged "
+                    "into an approved system."
+                ),
+                SubjectMatter.SANITATION,
+            ),
+            (
+                "Any room infested with such vermin shall be fumigated or disinfected.",
+                SubjectMatter.SANITATION,
+            ),
+            ("Each unit shall be equipped with a working smoke alarm.", SubjectMatter.FIRE_SAFETY),
+            ("The division may establish by rule a schedule of fees.", SubjectMatter.FEES),
+            ("The division shall adopt such rules as are necessary.", SubjectMatter.RULEMAKING),
+            ("The report shall be submitted by September 30.", SubjectMatter.RECORDKEEPING),
+        ],
+    )
+    def test_recognises_subjects_real_statutes_actually_use(self, extractor, sentence, expected):
+        assert expected in _only(_extract(extractor, sentence)).subjects
+
+
+class TestDefinitionalTextIsNotNormative:
+    """Definitions borrow deontic vocabulary without imposing duties.
+    Reading them as normative manufactures obligations that don't exist —
+    the opposite of the silent-drop failure, and just as wrong."""
+
+    @pytest.mark.parametrize(
+        "sentence",
+        [
+            "Any facility that may not be classified as a hotel is a roominghouse.",
+            "As used in this chapter, the term applies to transient occupancy.",
+            "For purposes of this section, a vacation rental is a public lodging establishment.",
+        ],
+    )
+    def test_definitions_produce_nothing(self, extractor, sentence):
+        result = _extract(extractor, sentence)
+        assert result.obligations == ()
+        assert result.unclassified == ()
+        assert result.ignored_sentences >= 1
+
+    def test_a_real_prohibition_is_still_caught(self, extractor):
+        """The guard must not swallow genuine prohibitions that happen to
+        sit near definitional language."""
+        result = _extract(extractor, "No vacation rental may be operated without a license.")
+        assert _only(result).modality is Modality.PROHIBITION

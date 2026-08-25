@@ -46,7 +46,7 @@ from datetime import date
 from typing import Any, Protocol
 
 from legal_engine.core.models import JurisdictionTier
-from legal_engine.obligations.models import Modality, Obligation, SubjectMatter
+from legal_engine.obligations.models import Bearer, Modality, Obligation, SubjectMatter
 
 # Ordered so that more specific patterns are tried before broader ones.
 _SUBJECT_PATTERNS: tuple[tuple[SubjectMatter, str], ...] = (
@@ -80,6 +80,48 @@ _SUBJECT_PATTERNS: tuple[tuple[SubjectMatter, str], ...] = (
     (SubjectMatter.ZONING, r"zoning district|\bzoned\b|residential district"),
     (SubjectMatter.SAFETY_INSPECTION, r"\binspect(?:ion|ed|s)?\b|fire (?:safety|code)|smoke alarm"),
     (SubjectMatter.ADVERTISING_DISCLOSURE, r"\badvertis|\blisting\b|\bposted? in\b"),
+    (
+        SubjectMatter.SANITATION,
+        (
+            r"\bsewage\b|\bwastewater\b|\bvermin\b|\bsanitar|\bsanitation\b"
+            r"|\bbathroom|\btoilet|\bplumbing\b|\bgarbage\b|\brefuse\b"
+            r"|\bfood-?borne\b|\bpotable\b|\bdisinfect|\bfumigat"
+        ),
+    ),
+    (
+        SubjectMatter.FIRE_SAFETY,
+        (
+            r"\bfire (?:safety|code|extinguisher|escape)\b|\bextinguisher"
+            r"|\bsmoke (?:alarm|detector)\b|\bcarbon monoxide\b|\bmeans of egress\b|\bexit sign"
+        ),
+    ),
+    (SubjectMatter.FEES, r"\bfees?\b|\bsurcharge\b|\bpenalt(?:y|ies)\b|\bfine(?:s|d)?\b"),
+    (SubjectMatter.RULEMAKING, r"\badopt(?:s|ed)? (?:such )?rules?\b|\bby rule\b|\brulemaking\b"),
+    (
+        SubjectMatter.RECORDKEEPING,
+        r"\brecords?\b|\breports?\b|\bshall be submitted\b|\bmaintain a (?:log|register)\b",
+    ),
+)
+
+# "The division shall adopt rules" is a duty on the agency, not the
+# operator. Without this the provision has no bearer the schema can hold
+# and falls out of the analysis entirely — the single largest cause of
+# unclassified provisions when measured against real statutory text.
+_REGULATOR = re.compile(
+    r"\bthe (?:division|department|agency|secretary|commission|board)\b", re.IGNORECASE
+)
+
+# Definitional and descriptive text borrows deontic vocabulary without
+# imposing a duty: "any facility that may not be classified as a hotel"
+# is a definition, not a prohibition. Checked before modality, because
+# reading it as normative manufactures obligations that don't exist.
+_DEFINITIONAL = re.compile(
+    r"\bmay not be classified\b"
+    r"|\bas used in this (?:chapter|section|part|code)\b"
+    r"|\bfor (?:the )?purposes of this (?:chapter|section|part|code)\b"
+    r"|\bas defined in\b"
+    r"|\bthe term [\"“]?\w+[\"”]? means\b",
+    re.IGNORECASE,
 )
 
 # A quantitative limit is a limit *on* something. "may not be rented more
@@ -172,7 +214,8 @@ class ExtractionResult:
         reads. Two extractions that differ only in prose are the same
         extraction for every purpose that matters here."""
         parts = sorted(
-            f"{o.modality.value}:{'+'.join(sorted(s.value for s in o.subjects))}"
+            f"{o.bearer.value}/{o.modality.value}:"
+            f"{'+'.join(sorted(s.value for s in o.subjects))}"
             for o in self.obligations
         )
         return " | ".join(parts) if parts else "(none)"
@@ -211,6 +254,9 @@ class KeywordObligationExtractor:
         ignored = 0
 
         for sentence in _sentences(text):
+            if _DEFINITIONAL.search(sentence):
+                ignored += 1
+                continue
             modality = _classify_modality(sentence)
             if modality is None:
                 ignored += 1
@@ -236,6 +282,7 @@ class KeywordObligationExtractor:
                     jurisdiction_path=jurisdiction_path,
                     subjects=frozenset(subjects),
                     modality=modality,
+                    bearer=_classify_bearer(sentence),
                     text=sentence,
                     adopted_date=adopted,
                 )
@@ -337,6 +384,7 @@ _OBLIGATION_SCHEMA = {
                 "properties": {
                     "text": {"type": "string"},
                     "modality": {"type": "string", "enum": [m.value for m in Modality]},
+                    "bearer": {"type": "string", "enum": [b.value for b in Bearer]},
                     "subjects": {
                         "type": "array",
                         "items": {"type": "string", "enum": [s.value for s in SubjectMatter]},
@@ -365,6 +413,7 @@ def _result_from_payload(
             jurisdiction_path=path,
             subjects=frozenset(SubjectMatter(s) for s in item["subjects"]),
             modality=Modality(item["modality"]),
+            bearer=Bearer(item.get("bearer", Bearer.REGULATED_PARTY.value)),
             text=item["text"],
         )
         for item in payload.get("obligations", [])
@@ -391,6 +440,14 @@ def _classify_modality(sentence: str) -> Modality | None:
     if _PERMISSIVE.search(sentence):
         return Modality.PERMISSION
     return None
+
+
+def _classify_bearer(sentence: str) -> Bearer:
+    """Regulator duties are recognised explicitly; everything else is
+    assumed to bind the regulated party, which is the reading that makes
+    an unattributed "shall provide parking" mean what it obviously
+    means."""
+    return Bearer.REGULATOR if _REGULATOR.search(sentence) else Bearer.REGULATED_PARTY
 
 
 def _classify_subjects(sentence: str) -> set[SubjectMatter]:

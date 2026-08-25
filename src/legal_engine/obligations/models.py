@@ -73,6 +73,29 @@ class SubjectMatter(str, Enum):
     TAXATION = "taxation"
     SAFETY_INSPECTION = "safety_inspection"
     ADVERTISING_DISCLOSURE = "advertising_disclosure"
+
+    # The five below were added from measurement, not from imagination.
+    # Running the extractor over six real sections of Fla. Stat. ch. 509
+    # left 68% of normative provisions unclassified, and roughly a third
+    # of those failed for want of a subject rather than for want of
+    # parsing: sanitation and wastewater rules, fire and life-safety
+    # requirements, fee schedules, agency rulemaking, and reporting
+    # deadlines. No amount of better language understanding fills a hole
+    # in the taxonomy — a model constrained to this schema has nowhere to
+    # put "wastewater shall be properly treated" either.
+    SANITATION = "sanitation"
+    """Sewage, wastewater, vermin, potable water, food-borne illness."""
+
+    FIRE_SAFETY = "fire_safety"
+    """Substantive life-safety requirements, as distinct from
+    SAFETY_INSPECTION, which is the act of inspecting for them."""
+
+    FEES = "fees"
+    RULEMAKING = "rulemaking"
+    """Authority to adopt rules — almost always borne by the regulator."""
+
+    RECORDKEEPING = "recordkeeping"
+    """Records, reports, and the deadlines attached to them."""
     PROPERTY_VALUATION = "property_valuation"
     """Present because Fla. Stat. § 509.032(7)(c) carves it out — a
     reminder that the taxonomy is driven by what statutes actually
@@ -86,6 +109,31 @@ class Modality(str, Enum):
     PROHIBITION = "prohibition"
     OBLIGATION = "obligation"
     PERMISSION = "permission"
+
+
+class Bearer(str, Enum):
+    """Who the duty falls on.
+
+    Added because measurement demanded it. Of the provisions this schema
+    could not represent across six real sections of Fla. Stat. ch. 509,
+    the single largest group — 38% — were duties on the *agency*: "the
+    division shall adopt rules", "the report shall be submitted by
+    September 30". Those are not extraction failures. They are provisions
+    an obligation model without a bearer literally cannot hold.
+
+    The distinction is also what a compliance product actually needs. "What
+    must I do" and "what does the regulator owe me" are different
+    questions asked by different people, and a system that merges them
+    answers neither well.
+    """
+
+    REGULATED_PARTY = "regulated_party"
+    """The operator, owner, or licensee — the default reading."""
+
+    REGULATOR = "regulator"
+    """An agency, division, or department acting under the statute."""
+
+    UNSPECIFIED = "unspecified"
 
 
 @dataclass(frozen=True)
@@ -121,6 +169,7 @@ class Obligation:
     subjects: frozenset[SubjectMatter]
     modality: Modality
     text: str
+    bearer: Bearer = Bearer.REGULATED_PARTY
     adopted_date: date | None = None
     effective_date: date | None = None
     source_url: str | None = None

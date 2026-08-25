@@ -132,6 +132,14 @@ honestly-flagged gap from the version before it — never a rewrite, always addi
   rather than vanishing, because a missed obligation reports an ordinance as not regulating
   something it does regulate.
 
+- **v1.16.0** — measured the extractor against **real statutory text** (six sections of Fla. Stat.
+  ch. 509, fetched from the Florida Senate) and acted on what the measurement said. Coverage was
+  **31.8%**. Diagnosing the 68% that failed produced the finding that mattered: the largest single
+  cause (38%) was duties borne by the **regulator** rather than the regulated party — provisions the
+  schema literally could not hold — and another 30% were subjects the taxonomy never had. Adding a
+  `bearer` field and five measured subjects took coverage to **64.7%**. The bottleneck was
+  **ontology, not language**.
+
 None of this means "battle-tested production system" — read on for what would still take.
 
 ## What's built
@@ -733,6 +741,48 @@ Self-consistency is not correctness.
 vocabulary is small and repetitive. It will miss unusually phrased provisions — which is why they
 surface as unclassified rather than as silence. `LlmObligationExtractor` carries the schema and the
 parsing path, and has never made a call.
+
+### What measuring the extractor actually showed
+
+Added in v1.16.0. The obvious next question after building an extractor is *how much of a real
+document can it read* — so this ran it over six sections of Fla. Stat. ch. 509 (definitions, duties,
+safety, sanitation, licensing, classifications) fetched from the Florida Senate.
+
+**Real municipal text was not available.** Municode, American Legal Publishing, and eCode360 —
+between them the publishers of most US municipal codes — all disallow this crawler explicitly
+(`User-agent: ClaudeBot` / `Disallow: /`). Spoofing a user-agent would be exactly the anti-detection
+approach `ingestion/` deliberately rejected, so the measurement uses state statute in the same
+regulatory domain instead, and says so.
+
+First result: **31.8% of normative provisions classified.** The useful work was diagnosing the rest:
+
+| Why a provision went unclassified | Share |
+|---|---:|
+| Duty falls on the **regulator**, not the regulated party | 38.4% |
+| Other / genuinely unclassifiable | 26.0% |
+| **Taxonomy gap** — sanitation, fire safety, fees | 30.1% |
+| False-positive normativity on definitional text | 5.5% |
+
+**Roughly two-thirds of the failure was ontology, not language.** That inverts the assumption the
+whole neuro-symbolic literature runs on. A language model constrained to this same schema fails on
+the identical provisions — it has nowhere to put *"wastewater shall be properly treated"* or
+*"the division shall adopt rules"* either. Better parsing cannot fill a hole in the taxonomy.
+
+Two changes followed directly from the data:
+
+- **`Bearer`** — who owes the duty. `"The division shall adopt rules"` and `"the operator shall
+  provide parking"` are structurally different provisions, and an obligation model without a bearer
+  cannot represent the first at all. It's also the distinction a compliance product needs: *what
+  must I do* and *what does the regulator owe me* are different questions asked by different people.
+- **Five subjects added from measurement** — `SANITATION`, `FIRE_SAFETY`, `FEES`, `RULEMAKING`,
+  `RECORDKEEPING` — each because real text needed it, not because it rounded out a diagram.
+
+Coverage after: **64.7%**, with the bearer split running 32 regulator / 34 regulated party, which
+confirms the 38% diagnosis was real rather than an artifact of the heuristic used to measure it.
+
+**What this still isn't**: 35% remains unclassified, and state statute is not municipal ordinance —
+the domain is right but the tier is not. The honest next measurement needs real municipal text,
+which requires either a publisher that permits it or a human supplying the document.
 
 ### Statutory conflict resolution
 
