@@ -36,6 +36,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
+from decimal import Decimal
 from enum import Enum
 
 from legal_engine.core.models import JurisdictionTier
@@ -123,6 +124,14 @@ class SubjectMatter(str, Enum):
     BUILDING_STANDARDS = "building_standards"
     """Structural requirements: railings, stairways, egress construction.
     Distinct from FIRE_SAFETY, which is about a specific hazard."""
+    # --- employment (fork/floor-vs-ceiling spike) ---
+    # A second domain, added to test whether the doctrine layer survives a
+    # rule system that runs in the opposite direction from preemption.
+    MINIMUM_WAGE = "minimum_wage"
+    MAXIMUM_WORKWEEK = "maximum_workweek"
+    OVERTIME_PREMIUM = "overtime_premium"
+    CHILD_LABOR = "child_labor"
+
     PROPERTY_VALUATION = "property_valuation"
     """Present because Fla. Stat. § 509.032(7)(c) carves it out — a
     reminder that the taxonomy is driven by what statutes actually
@@ -164,6 +173,27 @@ class Bearer(str, Enum):
 
 
 @dataclass(frozen=True)
+class Threshold:
+    """A quantified standard: $16.50 per hour, 40 hours per week.
+
+    ``Decimal`` rather than ``float`` because these are money and legal
+    limits, and a wage comparison that turns on binary floating point is
+    a wage comparison that will eventually be wrong by a cent in the
+    direction nobody wants to explain.
+
+    Added for the floor/ceiling spike. Preemption never needed it —
+    scope-based doctrine decides without reading the number — which is
+    itself the finding: content-dependent doctrine needs content.
+    """
+
+    value: Decimal
+    unit: str
+    """Free text, compared for equality only. "per hour" and "hourly" do
+    not compare equal, and silently treating them as equal would be worse
+    than refusing."""
+
+
+@dataclass(frozen=True)
 class Obligation:
     """One operative provision, not one document.
 
@@ -197,6 +227,7 @@ class Obligation:
     modality: Modality
     text: str
     bearer: Bearer = Bearer.REGULATED_PARTY
+    threshold: Threshold | None = None
     adopted_date: date | None = None
     effective_date: date | None = None
     source_url: str | None = None
