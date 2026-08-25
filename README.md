@@ -109,6 +109,14 @@ honestly-flagged gap from the version before it — never a rewrite, always addi
   contention via `unresolved_candidates`. Prompted by a research plan whose defeasibility track
   correctly identified this gap.
 
+- **v1.13.0** — three gaps that had all been documented rather than fixed. A deployment now
+  **refuses to start** on the placeholder secrets this repo ships with (`core/startup_checks.py`) —
+  previously "plaintext secret defaults" sat under Known limitations, which made it an acknowledged
+  risk rather than a prevented one, and an acknowledged risk still ships.
+  `settings.require_email_verification` makes `UserAccount.email_verified` gate something for the
+  first time. And `ConsentLedger`'s startup replay is now measured instead of disclaimed: linear at
+  ~0.6us/entry, with memory rather than time as the real ceiling.
+
 None of this means "battle-tested production system" — read on for what would still take.
 
 ## What's built
@@ -558,7 +566,9 @@ against the documented API contracts" as established, not "this has been proven 
 KMS/Vault." The consent check itself
 is now O(1) (`ConsentLedger`, above) rather than an O(n) WAL scan, but the ledger is still an
 in-process, in-memory projection rebuilt by a single full replay at startup — fine at this system's
-current scale (and current WAL size), not something that's been load-tested the way
+current scale — replay is now measured as linear at ~0.6us/entry
+(`tests/unit/test_consent_scale.py`), with memory rather than time as the real ceiling — not
+something that's been load-tested the way
 `/verification/verify` has (see "Load testing" below), and not yet a persisted index of its own
 (a restart replays the whole WAL again, rather than resuming from a snapshot).
 - **`ui/`** — a Next.js (Pages Router, TypeScript, Tailwind) dashboard: `ProofInspector` (submit a
@@ -660,6 +670,56 @@ statutes tied to the same entity actually contradict each other is a separate qu
 candidate. Nothing here reaches into `deontic/`: a lex specialis exception is structurally a default
 refined by an exception, which is what System E models, but that's a resemblance between layers, not
 a dependency, and wiring them would couple two independent modules with no caller needing it.
+
+### Refusing to start insecurely
+
+Added in v1.13.0 (`core/startup_checks.py`). `jwt_secret` and `api_client_secret` both ship as
+`"change-me-in-production"`, which is the right default for a repo you can clone and run — and
+means a deployment that never set them signs every token with a value published in this
+repository's source. Anyone who can read GitHub could mint a valid token for any subject and
+tenant.
+
+Nothing checked this. It was listed under Known limitations, which made it *acknowledged* rather
+than *prevented*, and an acknowledged risk still ships.
+
+- Outside a recognised development environment (`development`, `dev`, `local`, `test`, `testing`),
+  startup **raises** on a placeholder or too-short secret. Every other guard here fails closed —
+  `KeySigner`, `EmailSender`, `SemanticEntropyGate` — and a warning would be the same shape of
+  mistake this project has now found three times: something that reads as a control and isn't one.
+  A log line at startup gets scrolled past exactly once.
+- Keyed on `environment` rather than `api_auth_enabled`, because "auth disabled in production" is
+  itself a misconfiguration, not grounds for an exemption. Any unfamiliar environment name is
+  treated as a deployment: erring toward refusing to boot costs seconds to fix, and the failure it
+  prevents is not recoverable at all.
+- The minimum length isn't arbitrary — RFC 7518 §3.2 requires an HS256 key at least as long as the
+  hash output, so 32 characters is the standard's floor.
+- All problems are reported at once, since one restart per problem is a miserable way to discover
+  there were two.
+
+Development is exempt, so the zero-config path and the whole test suite are unaffected.
+
+### Email verification enforcement
+
+Added in v1.13.0. `UserAccount.email_verified` was written by `POST /auth/verify-email` and
+displayed by `GET /auth/members` from the day it was added, and gated nothing at all.
+`settings.require_email_verification` turns on `require_verified_email` across every protected
+router.
+
+**Off by default**, deliberately: enabling it retroactively locks out every account registered
+before it, which has to be a deliberate choice rather than a surprise on upgrade.
+
+Three things must keep working when it's on, and each has a test:
+
+- **The demo credential**, which has no `UserAccount` at all — it predates registration and is
+  checked directly by `POST /auth/token`. Requiring a flag it can never carry would break the
+  zero-config path for no security gain.
+- **`POST /auth/verify-email`**, or the gate would deadlock the route that clears it.
+- **Password reset**, or anyone who lost access before verifying would be stranded — unable to
+  verify without the account and unable to reset without verifying.
+
+The whole `/auth` router is outside the gate for those reasons. The check reads the account on each
+request rather than anything baked into the token, so verifying unblocks an existing session
+without re-login.
 
 ### Deontic reasoning
 
@@ -938,12 +998,11 @@ remains untested.
 
 Read this before treating any of the above as more finished than it is:
 
-- **The Playwright suite has run for real (twice on Chromium, plus whatever CI's next run
-  produces across all three browsers) and passed 16/16 both times.** What that does and doesn't
-  establish: it's been run by one person on one machine so far — CI's cross-browser matrix hasn't
-  executed yet as of this commit (it will on the next push). Treat "the UI has real, cross-browser-
-  configured behavioral test coverage, and it already found and fixed one bug" as established;
-  treat "this has run in CI, repeatedly, over time" as not yet true.
+- **The Playwright suite now runs in CI across all three browsers, and passes.** For most of this
+  project's history that was aspirational: the workflow existed but had never executed (see the CI
+  bullet below). Chromium, Firefox and WebKit all pass as of the first real run. What's still true:
+  this is a handful of runs, not a record over time, and the suite covers the three dashboard
+  components rather than the whole surface.
 - **Every gap this section originally named is closed now; a handful of smaller, honestly-scoped
   ones remain.** As of v1.2.0, `StatuteRepository`/`GraphService`/`VectorIndex` are genuinely
   tenant-scoped end to end; as of v1.3.0, `POST /auth/register` provisions genuine, independent
@@ -957,9 +1016,11 @@ Read this before treating any of the above as more finished than it is:
   session for that user, not just the reset token itself; as of v1.7.0, an owner can list, promote,
   demote, or remove a tenant's members, with a removal killing that member's live sessions
   immediately (see "User accounts, tokens & revocation" above for all eight) — none of that
-  aspirational. What's still missing, smaller in scope than what's been closed: `email_verified` is
-  tracked but not enforced anywhere, and `SmtpEmailSender` has never been exercised against a real
-  mail server.
+  aspirational. As of v1.13.0, `email_verified` actually gates
+  something — `settings.require_email_verification` turns on a check across every protected router,
+  off by default because enabling it retroactively locks out accounts registered before it. What's
+  still missing: `SmtpEmailSender` has never been exercised against a real mail server, so the
+  verification email that gate depends on is dispatched by code that has never delivered one.
 - **The liability-disclaimer consent record is real (tamper-evident, tied to a server-verified
   token subject, tenant-scoped, and — since `ConsentLedger` — an O(1) indexed lookup rather than a
   WAL scan) but its supporting infrastructure is still minimal.** The WAL's signing key is a
@@ -969,9 +1030,13 @@ Read this before treating any of the above as more finished than it is:
   can revoke an acceptance (`POST /legal/revoke` — "the tenant's authorized signer changed" flow),
   which is itself just another appended, tamper-evident WAL entry, not a mutation of the original
   one — append-only is still the point. `ConsentLedger` itself is an in-process index rebuilt by a
-  full WAL replay at every startup, not a persisted index of its own — untested at any real scale
-  (WAL size, replay time, or concurrent tenant count). See "Liability disclaimer & consent" above
-  for what it does establish.
+  full WAL replay at every startup, not a persisted index of its own. That used to be flagged as
+  "untested at any real scale"; as of v1.13.0 it's measured rather than assumed
+  (`tests/unit/test_consent_scale.py`). Both replay and the disk load that precedes it are linear —
+  roughly 0.6 and 3.9 microseconds per entry — so a million-entry log costs about five seconds of
+  startup. **The real ceiling is memory, not time**: at ~546 bytes per entry that same log is
+  ~550 MB resident, because `WriteAheadLog` holds every entry in a list. Nothing addresses that
+  yet. See "Liability disclaimer & consent" above for what it does establish.
 - **Load testing has been run a few times, at up to 300 concurrent users, on one machine.** That's
   real evidence the concurrency fix holds, that the Z3 timeout budget is respected even under heavy
   queueing, and that larger response payloads don't change that — it is not evidence of behavior at
@@ -1010,6 +1075,14 @@ is the review of a proposed v2.0 architecture: one node of it shipped (the seman
 three remain buildable, two can't be built here, and six defects are documented — including an
 abstention threshold that could never fire and a pooling pattern that would have leaked data across
 tenants. It's a record of what was assessed, not a plan of record.
+
+CI runs six jobs — lint/type-check/tests, Postgres integration, the UI build, and Playwright
+across Chromium, Firefox and WebKit. Worth knowing the history: the workflow existed from the start
+and **had never once executed**, because its trigger named `branches: [main]` while the branch is
+`master`. Twelve releases shipped against a pipeline that was never a gate. The first real run
+failed immediately (asyncpg rejects timezone-aware datetimes bound to naive timestamp columns — see
+v1.9.2 and the `_as_utc`/`timezone=True` note in `persistence/sql_repository.py`), which is a fair
+summary of what "configured but unverified" is worth.
 
 Three gates run in CI and should be run locally before a commit:
 

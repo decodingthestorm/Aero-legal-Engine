@@ -171,6 +171,43 @@ async def require_auth(request: Request) -> str | None:
     return str(subject)
 
 
+async def require_verified_email(
+    request: Request, subject: Annotated[str | None, Depends(require_auth)]
+) -> None:
+    """403s unless the caller's account has a verified email address.
+
+    Three no-op conditions, in order. Auth disabled: there's no identified
+    caller to check, same as require_auth/require_consent.
+    settings.require_email_verification off (the default): enabling this
+    retroactively locks out every account registered before it, so it has
+    to be opted into. And the demo credential
+    (settings.api_client_id) has no UserAccount at all — it predates
+    registration and is checked directly by POST /auth/token — so
+    requiring a verification flag it can never have would break the
+    zero-config path for no security gain.
+
+    Deliberately *not* applied to the /auth router. Someone who can't get
+    past this check still needs POST /auth/verify-email to fix it, and
+    gating password reset behind email verification would strand anyone
+    who lost access before verifying.
+    """
+    if not settings.api_auth_enabled or not settings.require_email_verification:
+        return
+    if subject is None or subject == settings.api_client_id:
+        return
+
+    user_repository: UserRepository = request.app.state.user_repository
+    user = await user_repository.get_by_email(subject)
+    if user is None or not user.email_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "This account's email address is not verified. "
+                "See POST /auth/verify-email."
+            ),
+        )
+
+
 async def require_consent(request: Request, tenant_id: Annotated[str, Depends(get_current_tenant)]) -> None:
     """No-ops when settings.api_auth_enabled is False, same as
     require_auth/get_current_tenant — consent enforcement only means

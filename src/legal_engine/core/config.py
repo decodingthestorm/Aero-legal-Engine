@@ -189,6 +189,14 @@ class Settings(BaseSettings):
     # harmless no-op, not a security-relevant reuse.
     email_verification_token_expires_days: int = 7
 
+    # api/dependencies.py's require_verified_email. Off by default so the
+    # zero-config path and every existing deployment keep working —
+    # turning it on retroactively locks out every account registered
+    # before it, which has to be a deliberate choice rather than a
+    # surprise on upgrade. UserAccount.email_verified was tracked and
+    # displayed but gated nothing at all until this existed.
+    require_email_verification: bool = False
+
     # Tenant every request is scoped to when settings.api_auth_enabled is
     # False (the default) — the whole deployment behaves as one tenant,
     # unchanged from pre-multi-tenancy behavior.

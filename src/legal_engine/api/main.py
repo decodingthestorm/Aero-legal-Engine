@@ -17,7 +17,11 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI
 
-from legal_engine.api.dependencies import require_auth, require_consent
+from legal_engine.api.dependencies import (
+    require_auth,
+    require_consent,
+    require_verified_email,
+)
 from legal_engine.api.middleware import add_middleware
 from legal_engine.api.routes import (
     auth,
@@ -34,6 +38,7 @@ from legal_engine.core.config import settings
 from legal_engine.core.email_sender_factory import build_email_sender
 from legal_engine.core.key_signer_factory import build_key_signer
 from legal_engine.core.logging import configure_logging, get_logger
+from legal_engine.core.startup_checks import verify_production_configuration
 from legal_engine.core.wal import WriteAheadLog
 from legal_engine.formal_logic.solver_pool import SolverPool
 from legal_engine.ingestion.rate_limiter import PoliteFetcher
@@ -48,6 +53,11 @@ logger = get_logger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logging()
+    # Before anything is constructed: a deployment running on the
+    # placeholder secrets this repo ships with signs every token with a
+    # value published in its own source. Fails closed rather than warning
+    # — see core/startup_checks.py.
+    verify_production_configuration(settings)
     # Per-tenant GraphService/VectorIndex instances — see
     # knowledge_graph/tenant_registry.py — replace the single shared
     # graph_service/vector_index that pre-multi-tenancy code used to build
@@ -97,7 +107,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Legal Engine Platform API", version="1.12.0", lifespan=lifespan)
+    app = FastAPI(title="Legal Engine Platform API", version="1.13.0", lifespan=lifespan)
     add_middleware(app)
 
     # /auth (token/register) and /legal/disclaimer must stay unprotected
@@ -108,7 +118,10 @@ def create_app() -> FastAPI:
     app.include_router(auth.router, prefix="/auth", tags=["auth"])
     app.include_router(legal.router, prefix="/legal", tags=["legal"])
 
-    protected = [Depends(require_auth)]
+    # require_verified_email no-ops unless settings.require_email_verification
+    # is on, so this changes nothing by default — see its docstring for why
+    # it's opt-in and why the /auth router is deliberately excluded.
+    protected = [Depends(require_auth), Depends(require_verified_email)]
     # verification/simulation additionally require an on-record acceptance
     # of the current liability disclaimer (compliance/consent.py) — these
     # are the two subsystems the disclaimer text is actually about ("formal
