@@ -89,6 +89,101 @@ class TestModalityIsNotInverted:
         assert _only(result).modality is Modality.PERMISSION
 
 
+class TestNegatedRequirementsAreExemptions:
+    """The second inversion, found the same way as the first — by
+    measuring against text nobody had tuned against.
+
+    Minnesota § 157.16 writes exemptions as "Special event food stands
+    are not required to submit plans". ``\\brequired to\\b`` matched the
+    tail, and the extractor recorded an OBLIGATION to submit plans
+    against a statute saying precisely the opposite.
+
+    Worse than an unrecognised provision, which the caller is at least
+    told about. An inverted one is a confident wrong answer indistinguishable
+    from a right one: acting on it means demanding a permit the law
+    expressly waives.
+    """
+
+    @pytest.mark.parametrize(
+        "sentence",
+        [
+            "A permit is not required to operate a mobile food unit.",
+            "The operator is not required to register the property.",
+            "An applicant shall not be required to submit a registration fee.",
+            "A licensee need not submit a second permit application.",
+            "The licensee is exempt from the annual registration fee.",
+        ],
+    )
+    def test_an_exemption_reads_as_permission(self, extractor, sentence):
+        """PERMISSION rather than a fourth modality: an exemption is a
+        licence not to comply, which is what PERMISSION already means."""
+        assert _only(_extract(extractor, sentence)).modality is Modality.PERMISSION
+
+    @pytest.mark.parametrize(
+        "sentence",
+        [
+            "Special event food stands are not required to submit plans.",
+            "A licensee need not submit a second application.",
+        ],
+    )
+    def test_an_unrecognised_exemption_abstains_rather_than_inverting(self, extractor, sentence):
+        """Verbatim from Minn. Stat. § 157.16, and the sharper form of the
+        claim. Neither sentence carries a subject this taxonomy knows, so
+        the honest outcome is abstention — never an OBLIGATION asserting
+        the duty the statute has just waived."""
+        result = _extract(extractor, sentence)
+        assert result.obligations == ()
+        assert len(result.unclassified) == 1
+
+    def test_the_negation_wins_regardless_of_which_modal_carries_it(self, extractor):
+        """"shall not be required" is an exemption on the same footing as
+        "is not required", so negation is checked ahead of prohibition
+        rather than after it."""
+        result = _extract(extractor, "An applicant shall not be required to submit a fee.")
+        assert _only(result).modality is Modality.PERMISSION
+
+    def test_the_unnegated_form_still_reads_as_an_obligation(self, extractor):
+        """The guard against over-correcting: the fix must not swallow
+        genuine requirements phrased with the same verb."""
+        result = _extract(extractor, "Each owner is required to register the property.")
+        assert _only(result).modality is Modality.OBLIGATION
+
+
+class TestIndicativeObligations:
+    """Statutes bind in the indicative as readily as the imperative.
+
+    "The fee is due by July 1" is exactly as binding as "the fee shall be
+    paid by July 1". Recognising only modal verbs dropped the whole class
+    into ``ignored_sentences`` — a bare count — where it never reached the
+    coverage denominator and so could not show up as a gap.
+    """
+
+    @pytest.mark.parametrize(
+        "sentence",
+        [
+            "The annual license fee is due by July 1 of each year.",
+            "Plans submitted late are subject to an additional inspection fee.",
+            "The permit fee is payable upon application.",
+            "The operator is liable for the cost of the safety inspection.",
+        ],
+    )
+    def test_an_indicative_duty_is_an_obligation(self, extractor, sentence):
+        assert _extract(extractor, sentence).obligations[0].modality is Modality.OBLIGATION
+
+    @pytest.mark.parametrize(
+        "sentence",
+        [
+            "Each day the establishment operates without a license constitutes a separate offense.",
+            "If a campground consists of five or more tents, it is presumed to be commercial.",
+        ],
+    )
+    def test_consequence_rules_are_not_forced_into_a_modality(self, extractor, sentence):
+        """Deliberately narrow. These state legal consequences rather than
+        duties, and inventing a modality for them would trade a known gap
+        for an unknown error — the trade this extractor exists to refuse."""
+        assert _extract(extractor, sentence).obligations == ()
+
+
 class TestSubjectClassification:
     @pytest.mark.parametrize(
         ("sentence", "expected"),

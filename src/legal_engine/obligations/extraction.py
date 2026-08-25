@@ -173,7 +173,22 @@ _DEFINITIONAL = re.compile(
     r"|\bas used in this (?:chapter|section|part|code)\b"
     r"|\bfor (?:the )?purposes of this (?:chapter|section|part|code)\b"
     r"|\bas defined in\b"
-    r"|\bthe term [\"“]?\w+[\"”]? means\b",
+    r"|\bthe term [\"“]?\w+[\"”]? means\b"
+    # Statutory definition sections almost never write "the term". They
+    # write the defined phrase in quotes and follow it with "means":
+    #
+    #     "Critical control point" means a point or procedure ...
+    #     "Hazard" means any biological, chemical, or physical property
+    #
+    # The clause above missed both — it demands the literal words "the
+    # term", and \w+ cannot span a multi-word phrase. Definitions then
+    # reached the modality check, where borrowed vocabulary ("may cause
+    # an unacceptable consumer health risk") read as normative. Sixteen
+    # definitions across Maine and Minnesota were being counted as
+    # provisions, inflating the coverage denominator with sentences that
+    # impose no duty at all.
+    r"|[\"“][^\"”]{1,80}[\"”]\s+(?:means\b|has the meaning\b)"
+    r"|\bhas the meaning given\b",
     re.IGNORECASE,
 )
 
@@ -210,8 +225,58 @@ _PROHIBITIVE = re.compile(
     r"|^\s*no\s+.{0,60}?\b(?:may|shall|can)\b",
     re.IGNORECASE,
 )
+# A *negated* requirement is an exemption, and must be caught before
+# both branches below — otherwise the negation is stepped over and the
+# provision comes out meaning its own opposite.
+#
+# Found by measurement, not by reading. Minnesota writes exemptions as
+# "Special event food stands are not required to submit plans", and
+# `\brequired to\b` matched the tail of it: the engine recorded an
+# OBLIGATION to submit plans against a statute that says the opposite.
+# "A permit is not required to operate a mobile food unit" came back as
+# a duty to obtain a permit.
+#
+# This is the worst failure this extractor can produce. An unrecognised
+# provision is a hole the caller is told about; an inverted one is a
+# confident wrong answer that reads exactly like a right one, and a
+# compliance officer acting on it would demand a permit the law
+# expressly waives. Same family as the leading-negation bug above, and
+# the reason both patterns are deliberately broad.
+#
+# PERMISSION rather than a fourth modality: an exemption is a licence
+# not to comply, which is what Modality.PERMISSION already means. The
+# negation wins regardless of which modal carries it — "shall not be
+# required" is an exemption on the same footing as "is not required",
+# so this precedes _PROHIBITIVE too.
+_NEGATED_OBLIGATION = re.compile(
+    r"\bnot\s+(?:be\s+)?(?:required|obligated|compelled)\b"
+    r"|\bneed not\b"
+    r"|\b(?:is|are)\s+exempt(?:ed)?\b"
+    r"|\b(?:is|are)\s+not\s+subject\s+to\b",
+    re.IGNORECASE,
+)
+
 _OBLIGATORY = re.compile(
     r"\bshall\b|\bmust\b|\bis required\b|\bare required\b|\brequired to\b", re.IGNORECASE
+)
+
+# Statutes state duties in the indicative as readily as the imperative.
+# "The fee is due by July 1" binds exactly as hard as "the fee shall be
+# paid by July 1", and recognising only modal verbs drops the whole
+# class — silently, into ignored_sentences, where it never reaches the
+# coverage denominator and so cannot show up as a gap.
+#
+# Deliberately narrow. Only forms whose deontic force is unambiguous are
+# here; "constitutes a separate offense" and "is presumed to be" state
+# legal consequences rather than duties, and are left to abstain rather
+# than be forced into a modality they don't carry.
+_INDICATIVE_OBLIGATION = re.compile(
+    r"\b(?:is|are)\s+due\b"
+    r"|\b(?:is|are)\s+payable\b"
+    r"|\b(?:is|are)\s+subject\s+to\b"
+    r"|\b(?:is|are)\s+liable\s+for\b"
+    r"|\b(?:is|are)\s+responsible\s+for\b",
+    re.IGNORECASE,
 )
 _PERMISSIVE = re.compile(
     r"\bmay\b|\bis permitted\b|\bare permitted\b|\bis allowed\b", re.IGNORECASE
@@ -491,11 +556,21 @@ def _sentences(text: str) -> list[str]:
 
 
 def _classify_modality(sentence: str) -> Modality | None:
-    # Prohibitive before obligatory: "shall not" contains "shall", and
-    # reading it as an obligation inverts the provision's meaning.
+    # Order is meaning here, not style. Each branch below contains the
+    # next one's trigger as a substring, so a later check firing first
+    # would invert the provision:
+    #
+    #   "are not required to submit"  contains  "required to"
+    #   "shall not be operated"       contains  "shall"
+    #
+    # Negation is therefore checked outermost-first.
+    if _NEGATED_OBLIGATION.search(sentence):
+        return Modality.PERMISSION
     if _PROHIBITIVE.search(sentence):
         return Modality.PROHIBITION
     if _OBLIGATORY.search(sentence):
+        return Modality.OBLIGATION
+    if _INDICATIVE_OBLIGATION.search(sentence):
         return Modality.OBLIGATION
     if _PERMISSIVE.search(sentence):
         return Modality.PERMISSION
