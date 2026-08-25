@@ -43,6 +43,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import date
+from enum import Enum
 from typing import Any, Protocol
 
 from legal_engine.core.models import JurisdictionTier
@@ -188,6 +189,11 @@ _DEFINITIONAL = re.compile(
     # provisions, inflating the coverage denominator with sentences that
     # impose no duty at all.
     r"|[\"“][^\"”]{1,80}[\"”]\s+(?:means\b|has the meaning\b)"
+    # The short-title clause, which nearly every act carries: "This
+    # chapter may be cited as the Example Act." The bare "may" read as a
+    # permission, so every statute picked up one spurious abstention from
+    # boilerplate that grants nobody anything.
+    r"|\bmay be cited as\b"
     r"|\bhas the meaning given\b",
     re.IGNORECASE,
 )
@@ -308,9 +314,46 @@ _MONTHS = {
 }
 
 
+# A provision cut off mid-clause, where the enumerated limbs that carry
+# its content were split away into separate sentences:
+#
+#     "A person, corporation, firm or copartnership may not: A."
+#
+# Exactly two of twenty-eight abstentions across the held-out regulatory
+# set, with no false positives — the whole reason this is a pattern and
+# not a length heuristic. Sentence length was tested as a signal for the
+# related table-merge defect and rejected: 18% of *correctly classified*
+# obligations run past 400 characters, so a length rule would flag
+# eleven good extractions to catch one bad one.
+_TRUNCATED = re.compile(r":\s*(?:\([a-z0-9]+\)|[A-Z])?\.?\s*$")
+
+
+class AbstentionReason(str, Enum):
+    """Why a provision could not be classified.
+
+    One undifferentiated reason string is not a worklist. Every one of
+    the twenty-eight abstentions in the held-out regulatory set carried
+    identical text, which told a reader *that* the extractor failed and
+    never *how* — and the two failures point in opposite directions:
+
+    * ``NO_SUBJECT_MATCH`` means the taxonomy is short a subject. The
+      text was read correctly and there is nowhere to put it.
+    * ``TRUNCATED_FRAGMENT`` means the sentence splitter cut a provision
+      apart. The taxonomy is fine; adding subjects would not help and
+      would dilute every other measurement.
+
+    Acting on the first when it was really the second is how a coverage
+    number gets improved without the analysis getting better.
+    """
+
+    NO_SUBJECT_MATCH = "no_subject_match"
+    TRUNCATED_FRAGMENT = "truncated_fragment"
+    MODEL_DECLINED = "model_declined"
+
+
 @dataclass(frozen=True)
 class UnclassifiedProvision:
-    """Normative language with no subject this extractor recognises.
+    """Normative language this extractor could not place.
 
     Surfaced rather than dropped: an ordinance section the extractor
     cannot read is a hole in the analysis, and the analysis has to know
@@ -318,6 +361,7 @@ class UnclassifiedProvision:
 
     text: str
     reason: str
+    code: AbstentionReason = AbstentionReason.NO_SUBJECT_MATCH
 
 
 @dataclass(frozen=True)
@@ -331,6 +375,34 @@ class ExtractionResult:
         """False when any normative provision went unclassified. A
         caller must not treat a partial extraction as a total one."""
         return not self.unclassified
+
+    @property
+    def coverage(self) -> float:
+        """Share of recognised normative provisions that were classified.
+
+        Read the denominator carefully: it counts provisions this
+        extractor recognised as normative, not provisions in the
+        document. Text whose deontic force it cannot see at all never
+        enters either term, so this is an upper bound on how much of a
+        statute was actually understood — never a measure of it.
+
+        1.0 for a document with nothing normative in it, which is the
+        honest reading: no provision went unrepresented.
+        """
+        total = len(self.obligations) + len(self.unclassified)
+        return 1.0 if total == 0 else len(self.obligations) / total
+
+    def triage(self) -> dict[AbstentionReason, tuple[UnclassifiedProvision, ...]]:
+        """Abstentions grouped by what would actually fix them.
+
+        The output a compliance reader needs before the obligations
+        themselves: a list of what was not read, sorted into taxonomy
+        gaps and parser defects, which are repaired in different places.
+        """
+        grouped: dict[AbstentionReason, list[UnclassifiedProvision]] = {}
+        for provision in self.unclassified:
+            grouped.setdefault(provision.code, []).append(provision)
+        return {reason: tuple(items) for reason, items in grouped.items()}
 
     def canonical_form(self) -> str:
         """A stable string summary, used to compare two extractions of
@@ -389,11 +461,21 @@ class KeywordObligationExtractor:
 
             subjects = _classify_subjects(sentence)
             if not subjects:
+                truncated = bool(_TRUNCATED.search(sentence))
                 unclassified.append(
                     UnclassifiedProvision(
                         text=sentence,
+                        code=(
+                            AbstentionReason.TRUNCATED_FRAGMENT
+                            if truncated
+                            else AbstentionReason.NO_SUBJECT_MATCH
+                        ),
                         reason=(
-                            "normative language present but no recognised subject matter — "
+                            "provision cut off mid-clause — its enumerated limbs were split "
+                            "into separate sentences, so the subject matter is not in this "
+                            "fragment to find"
+                            if truncated
+                            else "normative language present but no recognised subject matter — "
                             "this provision is not represented in the analysis"
                         ),
                     )
@@ -544,7 +626,11 @@ def _result_from_payload(
         for item in payload.get("obligations", [])
     )
     unclassified = tuple(
-        UnclassifiedProvision(text=t, reason="model could not classify")
+        UnclassifiedProvision(
+            text=t,
+            code=AbstentionReason.MODEL_DECLINED,
+            reason="model could not classify",
+        )
         for t in payload.get("unclassified", [])
     )
     return ExtractionResult(obligations=obligations, unclassified=unclassified)

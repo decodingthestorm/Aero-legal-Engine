@@ -24,6 +24,7 @@ from legal_engine.core.models import JurisdictionTier
 from legal_engine.obligations.corpus import FLORIDA_VACATION_RENTAL_PREEMPTION as FL_RULE
 from legal_engine.obligations.express_preemption import PreemptionStatus, analyze
 from legal_engine.obligations.extraction import (
+    AbstentionReason,
     ExtractionResult,
     KeywordObligationExtractor,
     LlmObligationExtractor,
@@ -32,6 +33,11 @@ from legal_engine.obligations.extraction import (
 from legal_engine.obligations.models import Bearer, Modality, SubjectMatter
 
 FL_PATH = ("United States", "Florida", "City of Example")
+
+def _sole_abstention(result: ExtractionResult):
+    assert len(result.unclassified) == 1, result.unclassified
+    return result.unclassified[0]
+
 
 
 @pytest.fixture
@@ -617,3 +623,83 @@ class TestSubordinateLegislatureBearer:
         most important sentence of a preemption statute unclassified."""
         result = _extract(extractor, "A city or town may not prohibit vacation rentals.")
         assert SubjectMatter.PROHIBITION in _only(result).subjects
+
+
+class TestAbstentionsAreTriaged:
+    """One reason string for every failure is not a worklist.
+
+    All twenty-eight abstentions across the held-out regulatory set
+    carried identical text, which told a reader *that* the extractor
+    failed and never *how*. The two causes are repaired in different
+    places, and confusing them is how a coverage number improves without
+    the analysis getting better.
+    """
+
+    def test_a_missing_subject_is_reported_as_a_taxonomy_gap(self, extractor):
+        result = _extract(
+            extractor,
+            "Every operator shall maintain a valid certificate of insurance at all times.",
+        )
+        assert _sole_abstention(result).code is AbstentionReason.NO_SUBJECT_MATCH
+
+    @pytest.mark.parametrize(
+        "sentence",
+        [
+            "A person, corporation, firm or copartnership may not: A.",
+            "The written policy must include the following requirements: A.",
+        ],
+    )
+    def test_a_severed_list_lead_in_is_reported_as_a_parser_defect(self, extractor, sentence):
+        """Verbatim from Me. Rev. Stat. tit. 22. The subject matter lives
+        in the enumerated limbs, which the splitter cut away — so no
+        addition to the taxonomy could ever classify this fragment."""
+        assert _sole_abstention(result_of := _extract(extractor, sentence)).code is (
+            AbstentionReason.TRUNCATED_FRAGMENT
+        )
+        assert result_of.obligations == ()
+
+    def test_triage_groups_by_what_would_fix_it(self, extractor):
+        result = _extract(
+            extractor,
+            "Every operator shall maintain a valid certificate of insurance. "
+            "A person, corporation, firm or copartnership may not: A.",
+        )
+        triage = result.triage()
+        assert set(triage) == {
+            AbstentionReason.NO_SUBJECT_MATCH,
+            AbstentionReason.TRUNCATED_FRAGMENT,
+        }
+        assert len(triage[AbstentionReason.NO_SUBJECT_MATCH]) == 1
+        assert len(triage[AbstentionReason.TRUNCATED_FRAGMENT]) == 1
+
+    def test_triage_is_empty_when_everything_was_read(self, extractor):
+        result = _extract(extractor, "Each vacation rental shall provide one off-street parking space.")
+        assert result.triage() == {}
+        assert result.is_complete is True
+
+
+class TestCoverageReportsItsOwnDenominator:
+    def test_coverage_is_the_classified_share(self, extractor):
+        result = _extract(
+            extractor,
+            "Each vacation rental shall provide one off-street parking space. "
+            "Every operator shall maintain a valid certificate of insurance.",
+        )
+        assert result.coverage == pytest.approx(0.5)
+
+    def test_a_fully_read_document_is_one(self, extractor):
+        result = _extract(extractor, "Each vacation rental shall provide one off-street parking space.")
+        assert result.coverage == pytest.approx(1.0)
+
+    def test_a_document_with_nothing_normative_is_one_not_zero(self, extractor):
+        """The honest reading: no provision went unrepresented. Zero would
+        claim a failure that did not happen.
+
+        The short-title clause is the case that motivated adding it to
+        _DEFINITIONAL: nearly every act carries one, its bare "may" read
+        as a permission, and so every statute collected one spurious
+        abstention from boilerplate that grants nobody anything."""
+        result = _extract(extractor, "This chapter may be cited as the Example Act.")
+        assert result.obligations == ()
+        assert result.unclassified == ()
+        assert result.coverage == pytest.approx(1.0)
