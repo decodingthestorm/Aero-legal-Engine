@@ -51,6 +51,7 @@ from datetime import date
 from enum import Enum
 
 from legal_engine.core.models import JurisdictionTier
+from legal_engine.obligations.authority import AuthorityCheck, precheck
 from legal_engine.obligations.models import Obligation, SubjectMatter
 
 
@@ -157,11 +158,11 @@ class PreemptionFinding:
 def analyze(obligation: Obligation, rule: ExpressPreemptionRule) -> PreemptionFinding:
     """Applies one express preemption rule to one obligation.
 
-    Order matters and follows how the question is actually reached: does
-    this rule govern this polity at all, is the provision subordinate, is
-    it inside the reserved scope, and only then whether an exception
-    rescues it. Checking scope first would produce confident answers
-    about ordinances in states the statute has never reached.
+    The preliminaries — reach, subordination, scope — are shared with
+    floor doctrine and live in ``authority.precheck``. What follows them
+    is specific to preemption: whether an exception rescues the
+    provision. See ``floors.py`` for why the two doctrines diverge here
+    rather than sharing one parameterised path.
     """
 
     def finding(
@@ -179,37 +180,20 @@ def analyze(obligation: Obligation, rule: ExpressPreemptionRule) -> PreemptionFi
             missing_facts=missing_facts,
         )
 
-    if obligation.jurisdiction_name == rule.enacting_jurisdiction:
-        return finding(
-            PreemptionStatus.NOT_SUBORDINATE,
-            f"{rule.citation} was enacted by {rule.enacting_jurisdiction}, which cannot "
-            f"preempt its own enactment.",
-        )
-
-    if not obligation.is_within(rule.enacting_jurisdiction):
-        return finding(
-            PreemptionStatus.OUTSIDE_JURISDICTION,
-            f"{obligation.citation} was enacted in "
-            f"{' / '.join(obligation.jurisdiction_path)}, which is outside "
-            f"{rule.enacting_jurisdiction}'s reach. Tier alone would have made this look "
-            f"subordinate.",
-        )
-
-    if not _is_subordinate_to(obligation, rule):
-        return finding(
-            PreemptionStatus.NOT_SUBORDINATE,
-            f"{obligation.citation} sits at {obligation.jurisdiction_tier.name}, which is not "
-            f"below {rule.citation}'s {rule.tier.name} authority.",
-        )
-
-    overlap = obligation.subjects & rule.reserved_subjects
-    if not overlap:
-        return finding(
-            PreemptionStatus.NOT_IN_SCOPE,
-            f"{rule.citation} reserves "
-            f"{_names(rule.reserved_subjects)}; {obligation.citation} regulates "
-            f"{_names(obligation.subjects)}, none of which is reserved.",
-        )
+    check = precheck(
+        obligation,
+        enacting_jurisdiction=rule.enacting_jurisdiction,
+        tier=rule.tier,
+        subjects=rule.reserved_subjects,
+        rule_citation=rule.citation,
+    )
+    if check.outcome is AuthorityCheck.NOT_SUBORDINATE:
+        return finding(PreemptionStatus.NOT_SUBORDINATE, check.reasoning)
+    if check.outcome is AuthorityCheck.OUTSIDE_JURISDICTION:
+        return finding(PreemptionStatus.OUTSIDE_JURISDICTION, check.reasoning)
+    if check.outcome is AuthorityCheck.NOT_IN_SCOPE:
+        return finding(PreemptionStatus.NOT_IN_SCOPE, check.reasoning)
+    overlap = check.overlapping_subjects
 
     for exemption in rule.exemptions:
         if exemption.applies_to(obligation):
@@ -292,10 +276,6 @@ def _severity(status: PreemptionStatus) -> int:
     return _SEVERITY[status]
 
 
-def _is_subordinate_to(obligation: Obligation, rule: ExpressPreemptionRule) -> bool:
-    # JurisdictionTier is ordered with lower values as higher authority
-    # (treaty=0 ... municipal=4), so "below" is a larger value.
-    return obligation.jurisdiction_tier.value > rule.tier.value
 
 
 def _names(subjects: frozenset[SubjectMatter]) -> str:

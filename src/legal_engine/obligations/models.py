@@ -36,6 +36,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
+from decimal import Decimal
 from enum import Enum
 
 from legal_engine.core.models import JurisdictionTier
@@ -44,11 +45,23 @@ from legal_engine.core.models import JurisdictionTier
 class SubjectMatter(str, Enum):
     """What a provision regulates.
 
-    Deliberately narrow: these are the subjects that actually appear in
-    short-term-rental regulation, which is the first corpus. A second
-    domain would add its own members rather than forcing its concepts
-    into these. A taxonomy that tried to cover all of law in advance
+    Grown from corpora rather than designed up front. The first block
+    below comes from short-term-rental regulation, the next two from
+    measuring against Fla. Stat. ch. 509, and the employment block from
+    the floor/ceiling spike. Nothing here was added because it rounded
+    out a diagram; a taxonomy that tried to cover all of law in advance
     would be wrong everywhere instead of right somewhere.
+
+    **Known limit — one enum, now two domains.** This was documented as
+    narrow and STR-specific until employment subjects were added, and at
+    two domains a single enum with labelled sections is still the
+    simplest thing that works. It will not stay that way. The trigger to
+    split is a third domain, or any subject name that has to be qualified
+    to avoid colliding with another domain's ("DURATION" already means
+    something different to a lease than to a stay). The fix at that point
+    is per-domain taxonomies with ``Obligation.subjects`` taking a union
+    — a much larger change than adding a member, which is precisely why
+    it is worth hitting deliberately rather than by surprise.
 
     The first three are grouped because Florida's preemption names
     exactly them, but they are genuinely distinct: a ban, a minimum-stay
@@ -123,6 +136,16 @@ class SubjectMatter(str, Enum):
     BUILDING_STANDARDS = "building_standards"
     """Structural requirements: railings, stairways, egress construction.
     Distinct from FIRE_SAFETY, which is about a specific hazard."""
+    # --- employment ---
+    # A second domain, added to test whether the doctrine layer survives a
+    # rule system running opposite to preemption. It did not, which is why
+    # floors.py exists — see its module docstring. These are the subjects
+    # 29 U.S.C. 218(a) actually names.
+    MINIMUM_WAGE = "minimum_wage"
+    MAXIMUM_WORKWEEK = "maximum_workweek"
+    OVERTIME_PREMIUM = "overtime_premium"
+    CHILD_LABOR = "child_labor"
+
     PROPERTY_VALUATION = "property_valuation"
     """Present because Fla. Stat. § 509.032(7)(c) carves it out — a
     reminder that the taxonomy is driven by what statutes actually
@@ -164,6 +187,27 @@ class Bearer(str, Enum):
 
 
 @dataclass(frozen=True)
+class Threshold:
+    """A quantified standard: $16.50 per hour, 40 hours per week.
+
+    ``Decimal`` rather than ``float`` because these are money and legal
+    limits, and a wage comparison that turns on binary floating point is
+    a wage comparison that will eventually be wrong by a cent in the
+    direction nobody wants to explain.
+
+    Added for the floor/ceiling spike. Preemption never needed it —
+    scope-based doctrine decides without reading the number — which is
+    itself the finding: content-dependent doctrine needs content.
+    """
+
+    value: Decimal
+    unit: str
+    """Free text, compared for equality only. "per hour" and "hourly" do
+    not compare equal, and silently treating them as equal would be worse
+    than refusing."""
+
+
+@dataclass(frozen=True)
 class Obligation:
     """One operative provision, not one document.
 
@@ -197,6 +241,7 @@ class Obligation:
     modality: Modality
     text: str
     bearer: Bearer = Bearer.REGULATED_PARTY
+    threshold: Threshold | None = None
     adopted_date: date | None = None
     effective_date: date | None = None
     source_url: str | None = None
