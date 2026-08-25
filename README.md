@@ -149,6 +149,13 @@ honestly-flagged gap from the version before it — never a rewrite, always addi
   document structure**, not vocabulary, which is precisely where a language model would earn its
   keep and where keyword matching provably cannot.
 
+- **v1.18.0** — a second doctrine, and the discovery that forced it. Modelling the FLSA minimum
+  wage as an `ExpressPreemptionRule` reported California's $16.50 as **preempted**; 29 U.S.C.
+  § 218(a) expressly preserves it. Preemption decides by *scope* and never reads the subordinate
+  rule's number; a floor cannot be decided without it. `floors.py` is the second doctrine,
+  `authority.py` holds the preliminaries both share, and `express_preemption` was refactored onto it
+  with all 27 of its tests unchanged.
+
 None of this means "battle-tested production system" — read on for what would still take.
 
 ## What's built
@@ -649,6 +656,52 @@ one of those "optional" dependencies turned out to already be installed in a bro
 git history on `knowledge_graph/embeddings.py` for what that surfaced). `api` and `workers` are
 deployment-role extras (a library-only user shouldn't need FastAPI or Celery pulled in) rather
 than lazy-backend extras; CI installs both to cover their tests.
+
+### Floors, and why there are two doctrines
+
+Added in v1.18.0 (`obligations/floors.py`), from a spike that set out to break the preemption
+abstraction on purpose. It broke, informatively.
+
+Modelled as an `ExpressPreemptionRule` reserving `MINIMUM_WAGE` to the federal government,
+California's $16.50 wage came back **`PREEMPTED`**. The statute says the opposite in terms —
+29 U.S.C. § 218(a), fetched verbatim:
+
+> No provision of this chapter … shall excuse noncompliance with any Federal or State law or
+> municipal ordinance establishing a minimum wage **higher** than the minimum wage established under
+> this chapter or a maximum work week **lower** than the maximum workweek established under this
+> chapter…
+
+Three differences, and none is a missing feature in the preemption module:
+
+- **Preemption is content-independent; a floor is content-dependent.** `analyze()` decides by scope
+  and never reads the number in the subordinate rule. A floor cannot be decided without reading it.
+- **The output shape differs.** Preemption returns a validity verdict — the ordinance is void. A
+  floor returns an **operative value**: Georgia's $5.15 is not struck from the books, the federal
+  $7.25 simply governs for covered employees. `FloorFinding.operative_threshold` has no analogue in
+  `PreemptionFinding`, and a payroll system needs the number rather than the verdict.
+- **Stringency direction is per-subject.** That one sentence preserves a *higher* wage **and** a
+  *lower* workweek. A single "stricter means bigger" assumption gets the second backwards, so the
+  direction travels with the rule.
+
+Forcing both through one path would mean a rule type that sometimes reads content and sometimes
+doesn't, with a flag deciding which. So: two doctrines over a shared precheck. `authority.py` holds
+what both ask first — reach, subordination, subject overlap — and `express_preemption` was
+refactored onto it with all 27 of its tests unchanged, which is the evidence the extraction is real
+rather than cosmetic.
+
+The failing case is kept as a test. If someone later folds the doctrines together, it fails and
+explains why.
+
+Two details worth naming. `Threshold` uses `Decimal`, not `float` — a wage comparison decided by
+binary floating point is one that eventually goes wrong by a cent, and there's a boundary test at
+7.24 / 7.25 / 7.26. And it refuses on **mismatched units**: California's daily 8-hour overtime rule
+is a genuinely different protection from a weekly 40-hour cap, not a smaller version of it, so
+converting would fabricate a comparison the statutes don't support.
+
+**What this still isn't**: two domains is enough to show the layer generalises past one shape, and
+not enough to know how many shapes there are. Ceilings, safe harbours, and mutual recognition are
+all plausibly distinct and none is modelled. The taxonomy also now spans two domains in one enum,
+which is documented as a known limit with the trigger for splitting it stated.
 
 ### Structured obligations and express preemption
 
