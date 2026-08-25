@@ -125,21 +125,32 @@ class TestNegatedRequirementsAreExemptions:
         licence not to comply, which is what PERMISSION already means."""
         assert _only(_extract(extractor, sentence)).modality is Modality.PERMISSION
 
-    @pytest.mark.parametrize(
-        "sentence",
-        [
-            "Special event food stands are not required to submit plans.",
-            "A licensee need not submit a second application.",
-        ],
-    )
-    def test_an_unrecognised_exemption_abstains_rather_than_inverting(self, extractor, sentence):
+    def test_an_unrecognised_exemption_abstains_rather_than_inverting(self, extractor):
         """Verbatim from Minn. Stat. § 157.16, and the sharper form of the
-        claim. Neither sentence carries a subject this taxonomy knows, so
-        the honest outcome is abstention — never an OBLIGATION asserting
-        the duty the statute has just waived."""
-        result = _extract(extractor, sentence)
+        claim. "Special event food stands" is a subject this taxonomy does
+        not carry, so the honest outcome is abstention — never an
+        OBLIGATION asserting the duty the statute has just waived.
+
+        The failure mode being guarded is silent inversion, so an
+        abstention here is a pass and a classification would also be a
+        pass; an OBLIGATION is the only wrong answer."""
+        result = _extract(extractor, "Special event food stands are not required to submit plans.")
         assert result.obligations == ()
         assert len(result.unclassified) == 1
+
+    def test_no_exemption_anywhere_produces_an_obligation(self, extractor):
+        """The invariant that outlives any particular taxonomy. As
+        subjects are added these sentences move from abstention to
+        classification, and that is fine — what must never happen is a
+        negated requirement surfacing as a requirement."""
+        for sentence in (
+            "Special event food stands are not required to submit plans.",
+            "A licensee need not submit a second application.",
+            "A permit is not required to operate a mobile food unit.",
+            "The operator is not required to register the property.",
+        ):
+            result = _extract(extractor, sentence)
+            assert all(o.modality is not Modality.OBLIGATION for o in result.obligations), sentence
 
     def test_the_negation_wins_regardless_of_which_modal_carries_it(self, extractor):
         """"shall not be required" is an exemption on the same footing as

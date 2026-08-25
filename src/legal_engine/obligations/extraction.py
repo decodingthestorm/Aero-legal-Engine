@@ -73,13 +73,41 @@ _SUBJECT_PATTERNS: tuple[tuple[SubjectMatter, str], ...] = (
     ),
     (SubjectMatter.PROPERTY_VALUATION, r"property valuation|assessed (?:value|above|at)"),
     (SubjectMatter.PRIMARY_RESIDENCE, r"primary residence|owner-?occupied"),
-    (SubjectMatter.PERMIT_REGISTRATION, r"\bpermit\b|\blicen[cs]e\b|\bregist(?:er|ration)\b"),
+    # Plurals, and the verb/noun collision.
+    #
+    # `\bpermit\b` and `\blicen[cs]e\b` missed "permits", "licenses" and
+    # "licensure" — the forms statutes actually use most ("Licenses
+    # issued must be displayed", "Initial and renewal licenses"). The
+    # taxonomy's single most central subject was missing its own plural.
+    #
+    # The lookbehinds guard the other direction. "Operators shall not
+    # permit occupancy above eight persons" is the verb *to permit*, and
+    # tagging it PERMIT_REGISTRATION is not a cosmetic error: subjects
+    # feed express_preemption's scope test, so a spurious subject can
+    # make a rule appear inside a reserved scope it has nothing to do
+    # with, and void an ordinance on a preemption that never touched it.
+    (
+        SubjectMatter.PERMIT_REGISTRATION,
+        (
+            r"(?<!not )(?<!shall )(?<!may )(?<!must )(?<!to )\bpermits?\b"
+            r"|\blicen[cs]\w*\b"
+            r"|\bregist(?:er|ers|ration|rations)\b"
+        ),
+    ),
     (SubjectMatter.OCCUPANCY_LIMIT, r"\boccupan(?:cy|ts?)\b|number of (?:guests|occupants)"),
     (SubjectMatter.PARKING, r"\bparking\b|off-street space"),
     (SubjectMatter.NOISE, r"\bnoise\b|quiet hours|\bamplified sound\b"),
     (SubjectMatter.TAXATION, r"\btax(?:es|ation)?\b|transient occupancy"),
     (SubjectMatter.ZONING, r"zoning district|\bzoned\b|residential district"),
-    (SubjectMatter.SAFETY_INSPECTION, r"\binspect(?:ion|ed|s)?\b|fire (?:safety|code)|smoke alarm"),
+    # `\binspect(?:ion|ed|s)?\b` could not match "inspections" — the
+    # alternation ends before the plural s and \b then fails. Statutes
+    # overwhelmingly use the plural: "for the purpose of conducting
+    # inspections", "the frequency of inspections". "reinspection" missed
+    # for the same reason.
+    (
+        SubjectMatter.SAFETY_INSPECTION,
+        r"\b(?:re)?inspect\w*\b|fire (?:safety|code)|smoke alarm",
+    ),
     (SubjectMatter.ADVERTISING_DISCLOSURE, r"\badvertis|\blisting\b|\bposted? in\b"),
     (
         SubjectMatter.SANITATION,
@@ -114,14 +142,23 @@ _SUBJECT_PATTERNS: tuple[tuple[SubjectMatter, str], ...] = (
         SubjectMatter.ENFORCEMENT,
         (
             r"\badministrative sanctions?\b|\bstop the sale\b|\bstop-sale\b"
-            r"|\brevoke|\bsuspend(?:ed|sion)?\b|\benforce(?:ment|s|d)?\b"
-            r"|\blaw enforcement\b|\bproper destruction\b"
+            # "suspension" never matched: \bsuspend(?:ed|sion)?\b spells
+            # "suspendsion". "revocation" missed for the same reason —
+            # the noun forms of the two central enforcement powers.
+            r"|\brevok\w*\b|\brevocation\b|\bsuspend\w*\b|\bsuspension\b"
+            r"|\benforce\w*\b|\blaw enforcement\b|\bproper destruction\b"
+            # No subject owned "violation" or "offense" at all, which
+            # left the operative sentence of most penalty sections
+            # unclassified: "Each day that the violation remains
+            # uncorrected may be counted as a separate offense."
+            r"|\bviolations?\b|\boffen[cs]es?\b"
+            r"|\benjoin\w*\b|\binjunctive?\b|\bcease and desist\b"
         ),
     ),
     (
         SubjectMatter.ADMINISTRATIVE_PROCEDURE,
         (
-            r"\bvariance(?:s)?\b|\bappeal(?:s|ed)?\b|\bhearing\b"
+            r"\bvariance(?:s)?\b|\bappeal(?:s|ed)?\b|\bhearings?\b"
             r"|\badvisory council\b|\bnotification may be\b|\bupon request by\b"
         ),
     ),
