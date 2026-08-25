@@ -117,6 +117,14 @@ honestly-flagged gap from the version before it — never a rewrite, always addi
   first time. And `ConsentLedger`'s startup replay is now measured instead of disclaimed: linear at
   ~0.6us/entry, with memory rather than time as the real ceiling.
 
+- **v1.14.0** — the first step on Layer 0 (ingestion): `obligations/`, a structured representation
+  for regulatory provisions plus **express-preemption analysis**, built against the verbatim text of
+  Fla. Stat. § 509.032(7)(b) fetched from the Florida Senate. That one provision reserves *three*
+  subjects to the state (prohibition, duration, frequency), spares anything adopted on or before
+  June 1 2011, and carves out property-valuation rules — so a city night cap is void, the same
+  city's parking rule is untouched, an identical cap adopted in 2010 survives, and an undated one
+  cannot be decided at all. Tier-based reasoning gets three of those four wrong.
+
 None of this means "battle-tested production system" — read on for what would still take.
 
 ## What's built
@@ -617,6 +625,54 @@ one of those "optional" dependencies turned out to already be installed in a bro
 git history on `knowledge_graph/embeddings.py` for what that surfaced). `api` and `workers` are
 deployment-role extras (a library-only user shouldn't need FastAPI or Celery pulled in) rather
 than lazy-backend extras; CI installs both to cover their tests.
+
+### Structured obligations and express preemption
+
+Added in v1.14.0 (`obligations/`). The first real attack on Layer 0 — the gap between statutory
+prose and something a solver can reason over.
+
+**The worked example is a real statute.** Fla. Stat. § 509.032(7)(b), fetched verbatim from the
+Florida Senate:
+
+> A local law, ordinance, or regulation may not prohibit vacation rentals or regulate the duration
+> or frequency of rental of vacation rentals. This paragraph does not apply to any local law,
+> ordinance, or regulation adopted on or before June 1, 2011.
+
+Three features stacked in two sentences, each of which flattening into `if/else` destroys:
+
+- **Scope.** It reserves *prohibition, duration, frequency* — and nothing else. A Florida city's
+  night cap is void; the same city's parking requirement is untouched. Both are municipal, both
+  concern short-term rentals, both sit below the state. **Tier cannot tell them apart.** That's why
+  `SubjectMatter` exists.
+- **Defeasibility.** The grandfather clause is an exception attached to the rule, keyed on the
+  *adoption* date of the ordinance being tested. `adopted_date` is deliberately separate from
+  `effective_date`: an ordinance passed in May 2011 that took effect in 2012 is grandfathered on the
+  text as written, and conflating the two would decide real cases wrongly.
+- **Containment.** A Florida statute reaches Florida's subdivisions. Nothing in the tier ordering
+  says so — an Arizona city ordinance is also "municipal" and also "below state". `Obligation`
+  carries a `jurisdiction_path` rather than a name because a bare name cannot express reach, and
+  the bug is silent: the engine would confidently void ordinances in states the statute has never
+  touched.
+
+Outcomes are reported distinctly rather than as a boolean: `PREEMPTED`, `NOT_IN_SCOPE`,
+`GRANDFATHERED`, `EXEMPTED`, `OUTSIDE_JURISDICTION`, `NOT_SUBORDINATE`, `UNDETERMINED`. A
+grandfathered rule and an out-of-scope rule both survive, for different reasons, and a lawyer needs
+to know which — the first is vulnerable to amendment in a way the second isn't.
+
+**`UNDETERMINED` is the important one.** An ordinance with no adoption date, tested against a rule
+with a grandfather cutoff, cannot be decided — and the engine says so, naming the missing fact,
+rather than guessing in either direction. `survives` deliberately returns `False` for it, so a
+caller checking one boolean can't read an unresolved question as a clean bill of health.
+
+Only **express** preemption is modelled — where a statute says so in terms. Field and conflict
+preemption require judgment about legislative intent and can't be decided from a taxonomy;
+claiming otherwise would be exactly the overreach this codebase keeps refusing.
+
+**What this still isn't**: extraction is not automated. The corpus is hand-encoded, so this proves
+the *representation and the doctrine*, not that text can be read into it — which is the actual
+Layer 0 problem and remains open. The statute is verbatim and sourced; the municipal ordinances are
+**illustrative, not quoted**, because Municode disallows this crawler in robots.txt
+(`User-agent: ClaudeBot` / `Disallow: /`). And none of it is legal advice.
 
 ### Statutory conflict resolution
 

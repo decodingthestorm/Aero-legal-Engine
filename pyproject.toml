@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "legal-engine"
-version = "1.13.0"
+version = "1.14.0"
 description = "Distributed legal ingestion, formal verification, and game-theoretic statutory optimization platform"
 requires-python = ">=3.11"
 readme = "README.md"
