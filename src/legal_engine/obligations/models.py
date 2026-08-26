@@ -164,6 +164,46 @@ class SubjectMatter(str, Enum):
     may supplant the state scheme entirely — so a provision in this class
     can change which other provisions apply."""
 
+    FOOD_HANDLING = "food_handling"
+    """Preparation, storage, temperature, service, and the hygiene of the
+    people doing it.
+
+    Three independent states, which is what earns it a place: Virginia
+    requires standards for "food preparation and handling" and "personal
+    hygiene standards for employees, particularly those engaged in food
+    handling" (Va. Code §§ 35.1-13, 35.1-14); Vermont forbids food
+    exposed to "contamination that may render them unfit for human
+    consumption" (18 V.S.A. § 4303); Minnesota requires a sponsoring
+    organization to "develop food safety rules" (Minn. Stat. § 157.22).
+
+    Distinct from SANITATION, which is about the premises — sewage,
+    vermin, plumbing, linens. This is about the food itself, and the two
+    come apart constantly: a spotless kitchen holding chicken at the
+    wrong temperature fails this and passes that.
+
+    Generalises well beyond lodging, which is the test applied before
+    adding a subject here. Restaurants, groceries, food processors,
+    school and hospital kitchens, and mobile vendors are all regulated on
+    exactly these terms."""
+
+    RECREATIONAL_WATER = "recreational_water"
+    """Pools, spas, saunas, and the water in them.
+
+    Four states name it as a regulated facility class in its own right —
+    Maine licenses a "public pool or public spa" separately from lodging
+    (Me. Rev. Stat. tit. 22 § 2492), Minnesota prices it as its own fee
+    category (Minn. Stat. § 157.16), Vermont regulates "recreation water
+    facilities, spas, and related facilities" (18 V.S.A. § 4303), and
+    Virginia requires standards for "swimming pools, saunas, and other
+    similar facilities, including personnel standards for the operation
+    thereof" (Va. Code § 35.1-13).
+
+    The weakest of the additions on the overfitting test, since it
+    reached this taxonomy through lodging statutes. It survives because
+    pool codes bind municipal pools, schools, health clubs, and apartment
+    buildings that have nothing to do with lodging — the regime is about
+    the water, not the hotel."""
+
     HABITABILITY = "habitability"
     """Light, heat, ventilation, water — the conditions that make a
     dwelling fit to occupy."""

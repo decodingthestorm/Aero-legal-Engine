@@ -664,6 +664,74 @@ git history on `knowledge_graph/embeddings.py` for what that surfaced). `api` an
 deployment-role extras (a library-only user shouldn't need FastAPI or Celery pulled in) rather
 than lazy-backend extras; CI installs both to cover their tests.
 
+### Six states, and the ceiling this approach has
+
+**68.3%** on Neb. Rev. Stat. ch. 81 — the sixth state, held out, and a different regulatory *domain*
+from everything before it: food establishments, processing plants and salvage operations rather than
+lodging. 123 provisions across 19 sections.
+
+| Corpus | Provisions | Held out |
+|---|---:|---:|
+| Vermont, 18 V.S.A. ch. 85 | 43 | 79.1% |
+| **Nebraska, Neb. Rev. Stat. ch. 81** | **123** | **68.3%** |
+| Washington, RCW ch. 70.62 | 28 | 67.9% |
+| Maine + Minnesota | 94 | 67.0% |
+| Arizona, A.R.S. § 9-500.39 | 21 | 66.7% |
+| Virginia, Va. Code tit. 35.1 | 60 | 46.7% |
+
+**There is no single coverage number.** An earlier version of this document called ~67% a stable
+estimate on the strength of three measurements that happened to cluster. Six measurements put the
+range at **47–79%**, and the variation tracks how a state drafts rather than anything about the law.
+Quote the range and the floor.
+
+**Tuned gains are mostly not real, and the gap is measurable.** The taxonomy work in v1.25.0, scored
+two ways:
+
+| | Virginia — built from it | Nebraska — never seen |
+|---|---:|---:|
+| before | 57.4% | 61.7% |
+| after | 96.3% | 68.3% |
+| gain | **+38.9** | **+6.6** |
+
+Six of every seven points won on Virginia were tuning. The transferable gain is +6.6, and that is the
+number this release is worth.
+
+**Why the ceiling is structural.** Every state names the same concepts differently — Virginia's
+"regulation" for Maine's "rules", its Administrative *Process* Act, its "opportunity to be heard"
+for a hearing. Each fix generalises a little and then the next state introduces vocabulary nobody has
+seen. A keyword extractor's coverage on an unseen state is bounded by the synonyms it has already
+been shown, so this curve flattens by construction — the remaining distance is the argument for
+`LlmObligationExtractor`, not for more patterns.
+
+### The taxonomy had the right subjects under one state's names
+
+With the patterns and the parser fixed, the remaining bottleneck was the ontology — and most of it
+turned out not to be missing concepts at all.
+
+**`RULEMAKING` matched "rules" and never "regulation".** The word was learned from Maine and
+Minnesota; the synonym never was. Virginia writes "regulation" throughout — Va. Code Title 35.1
+chapter 2 is *titled* Regulations — so essentially every rulemaking provision in that state went
+unclassified. That single blind spot is a large part of why Virginia measured a third below Vermont
+on the same kind of text.
+
+The same shape repeated at smaller scale: Virginia's APA is the Administrative **Process** Act, not
+Procedure; its hearing right is stated as "an opportunity to be heard" and "to show cause" rather
+than by naming a hearing; `communicable disease` was present and `communicable diseases` was not;
+`vermin` was present and `pest` and `vector` were not; `potable` was present and `drinking water`
+was not.
+
+**Two subjects were genuinely missing**, both added on the two-independent-states rule:
+
+| Subject | States that name it | Why it is not the neighbouring subject |
+|---|---|---|
+| `FOOD_HANDLING` | VA, VT, MN | `SANITATION` is the premises. This is the food. A spotless kitchen holding chicken at the wrong temperature fails one and passes the other. |
+| `RECREATIONAL_WATER` | ME, MN, VT, VA | Each licenses pools and spas as a facility class in their own right, separately from lodging. |
+
+The rule also *excludes*, which is the point of having it. Maine's youth-camp medication provisions
+are four unclassified sentences in a single state, and stay unclassified until a second state shows
+the same category. A subject added from one corpus is a subject that will make every future
+measurement mean less.
+
 ### The parser, and why coverage is the wrong way to score it
 
 Segmentation was the dominant remaining defect once the patterns were fixed, and it is measured on

@@ -841,3 +841,110 @@ class TestSegmentation:
         ordinary colon is not mangled into false provisions."""
         text = "The operator shall provide the following: adequate light, heat and ventilation."
         assert _sentences(text) == [text]
+
+
+class TestVocabularyNotConcept:
+    """The taxonomy had the right subjects under only one state's names.
+
+    RULEMAKING was learned from Maine and Minnesota, which say "rules".
+    Virginia says "regulation" throughout — Va. Code Title 35.1 chapter 2
+    is titled *Regulations* — so essentially every rulemaking provision in
+    the state went unclassified. Not a missing concept; a missing synonym,
+    and a large part of why Virginia measured a third below Vermont on the
+    same kind of text.
+    """
+
+    @pytest.mark.parametrize(
+        "sentence",
+        [
+            "The Board may adopt a final regulation, with or without changes.",
+            "The Board may repeal or amend any regulation adopted pursuant to this subsection.",
+            "Regulations of the Board governing hotels shall provide minimum standards.",
+            "The Commissioner shall adopt rules pursuant to chapter 25.",
+            "The department shall promulgate regulations governing campgrounds.",
+        ],
+    )
+    def test_rules_and_regulations_are_the_same_subject(self, extractor, sentence):
+        assert SubjectMatter.RULEMAKING in _only(_extract(extractor, sentence)).subjects
+
+    @pytest.mark.parametrize(
+        ("sentence", "expected"),
+        [
+            # Virginia's APA has a different name, and states the hearing
+            # right without naming a hearing.
+            (
+                (
+                    "Such regulations shall be adopted in accordance with the "
+                    "Administrative Process Act."
+                ),
+                SubjectMatter.ADMINISTRATIVE_PROCEDURE,
+            ),
+            (
+                "The operator shall have an opportunity to be heard and to show cause.",
+                SubjectMatter.ADMINISTRATIVE_PROCEDURE,
+            ),
+            # The plural defect, in the one phrase carrying this subject.
+            (
+                "The operator shall take precautions to prevent communicable diseases.",
+                SubjectMatter.SANITATION,
+            ),
+            # "vermin" was present; "pest" and "vector" were not.
+            (
+                "The licensee shall follow procedures for vector and pest control.",
+                SubjectMatter.SANITATION,
+            ),
+            # "potable" was present; "drinking water" and "water supply"
+            # were not.
+            (
+                "Each campground shall provide an approved drinking water supply.",
+                SubjectMatter.SANITATION,
+            ),
+        ],
+    )
+    def test_the_same_subject_under_another_states_wording(self, extractor, sentence, expected):
+        assert expected in _only(_extract(extractor, sentence)).subjects
+
+
+class TestSubjectsAddedOnTheTwoStateRule:
+    """Two independent states minimum, which is what keeps the taxonomy
+    from absorbing whatever the last corpus happened to contain.
+
+    Applied honestly, the rule also *excludes*: Maine's youth-camp
+    medication provisions are four unclassified sentences in one state,
+    and stay unclassified until a second state shows the same category.
+    """
+
+    @pytest.mark.parametrize(
+        "sentence",
+        [
+            "Regulations shall provide standards for food preparation and handling.",
+            "The permittee shall observe personal hygiene standards when handling food.",
+            "Food shall not be exposed to contamination rendering it unfit for human consumption.",
+            "Each establishment shall maintain refrigeration of perishable items.",
+        ],
+    )
+    def test_food_handling(self, extractor, sentence):
+        """Virginia, Vermont and Minnesota. Distinct from SANITATION,
+        which is about the premises: a spotless kitchen holding chicken
+        at the wrong temperature fails this and passes that."""
+        assert SubjectMatter.FOOD_HANDLING in _only(_extract(extractor, sentence)).subjects
+
+    @pytest.mark.parametrize(
+        "sentence",
+        [
+            "Regulations shall set standards for swimming pools and saunas.",
+            "The operator shall maintain recreational water facilities in safe condition.",
+            "A person shall not operate a public spa without a licence.",
+        ],
+    )
+    def test_recreational_water(self, extractor, sentence):
+        """Maine, Minnesota, Vermont and Virginia each name it as a
+        regulated facility class in its own right."""
+        assert SubjectMatter.RECREATIONAL_WATER in _only(_extract(extractor, sentence)).subjects
+
+    def test_a_bare_pool_is_not_a_swimming_pool(self, extractor):
+        """Qualified rather than a bare "pool", which would fire on
+        "pool of applicants" and quietly attach a facility regime to a
+        staffing provision."""
+        result = _extract(extractor, "The department shall draw from the pool of certified inspectors.")
+        assert SubjectMatter.RECREATIONAL_WATER not in _only(result).subjects

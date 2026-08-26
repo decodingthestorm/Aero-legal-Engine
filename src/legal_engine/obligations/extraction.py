@@ -123,7 +123,41 @@ _SUBJECT_PATTERNS: tuple[tuple[SubjectMatter, str], ...] = (
             # found no subject at all while "sheets" would have.
             r"|\bpillowslips?\b|\bsheets?\b|\bbedding\b|\blaundered\b|\bmattress"
             r"|\blinens?\b|\btowels?\b|\bhousekeeping\b"
-            r"|\bcontagious\b|\bcommunicable disease\b|\bpublic health risk\b"
+            # "communicable disease" but not "communicable diseases" —
+            # the plural defect again, in the one phrase that carries
+            # this subject in Va. Code § 35.1-14.
+            r"|\bcontagious\b|\bcommunicable diseases?\b|\bpublic health risk\b"
+            # "vermin" was here and "pest" and "vector" were not, so
+            # "procedures for vector and pest control" — the standard
+            # phrasing in both Virginia sections that use it — matched
+            # nothing. Likewise "potable" without "drinking water" or
+            # "water supply".
+            r"|\bpests?\b|\bvectors?\b|\bpest control\b"
+            r"|\bdrinking water\b|\bwater suppl(?:y|ies)\b"
+        ),
+    ),
+    (
+        SubjectMatter.FOOD_HANDLING,
+        (
+            r"\bfood (?:preparation|handling|safety|service|protection|storage"
+            r"|allergy|code|temperature)\b"
+            r"|\bhandling of food\b|\bpreparation of food\b|\bpreservation of food\b"
+            r"|\brefrigerat\w*\b|\bperishable\b|\bfood-?borne\b"
+            r"|\bunfit for human consumption\b|\bfit for human consumption\b"
+            r"|\bpersonal hygiene\b|\bfood establishment\b|\butensils?\b"
+        ),
+    ),
+    (
+        SubjectMatter.RECREATIONAL_WATER,
+        # Qualified rather than a bare "pool", which would fire on
+        # "pool of applicants" and similar. Every form below is the
+        # statutory usage in at least one of the four states that name
+        # this as a regulated facility class.
+        (
+            r"\b(?:swimming|public|wading|bathing|spa)\s+pools?\b"
+            r"|\bpools?\s+(?:and|or)\s+spas?\b|\bpublic spas?\b"
+            r"|\bsaunas?\b|\bhot tubs?\b|\bwhirlpools?\b"
+            r"|\brecreation(?:al)?\s+water\b"
         ),
     ),
     (
@@ -141,13 +175,30 @@ _SUBJECT_PATTERNS: tuple[tuple[SubjectMatter, str], ...] = (
     (SubjectMatter.FEES, r"\bfees?\b|\bsurcharge\b|\bpenalt(?:y|ies)\b|\bfine(?:s|d)?\b"),
     (
         SubjectMatter.RULEMAKING,
-        # The active form only. Statutes state the same power in the
-        # passive at least as often — "All rules and amendments thereto
-        # shall be adopted in conformance with chapter 34.05 RCW" — where
-        # "rules" and "adopted" are separated by the auxiliary.
+        # Two blind spots, and the second was the larger defect in this
+        # whole taxonomy.
+        #
+        # First: the active form only. Statutes state the same power in
+        # the passive at least as often — "All rules and amendments
+        # thereto shall be adopted in conformance with chapter 34.05
+        # RCW" — where "rules" and "adopted" are split by the auxiliary.
+        #
+        # Second: **"rules" but never "regulation"**. The word was
+        # learned from Maine and Minnesota and the synonym never was.
+        # Virginia writes "regulation" throughout — Va. Code Title 35.1
+        # chapter 2 is titled *Regulations* — so essentially every
+        # rulemaking provision in the state went unclassified, which is
+        # a large part of why Virginia measured a third below Vermont on
+        # the same kind of text. A vocabulary gap, not a concept gap:
+        # the taxonomy had the right subject and only one of its names.
         (
-            r"\badopt(?:s|ed)? (?:such )?rules?\b|\bby rule\b|\brulemaking\b"
-            r"|\brules?\b[^.]{0,40}?\b(?:shall|must|may)\s+be\s+adopted\b"
+            r"\badopt(?:s|ed|ing)?\s+(?:such\s+|a\s+|any\s+|final\s+)*"
+            r"(?:rules?|regulations?)\b"
+            r"|\bby (?:rule|regulation)\b|\brulemaking\b"
+            r"|\b(?:rules?|regulations?)\b[^.]{0,40}?\b(?:shall|must|may)\s+be\s+adopted\b"
+            r"|\b(?:repeal|amend)(?:s|ed|ing)?\s+(?:any\s+)?(?:rule|regulation)s?\b"
+            r"|\bregulations?\s+(?:of|adopted by|promulgated by)\s+the\b"
+            r"|\bpromulgat\w*\b"
         ),
     ),
     (
@@ -184,7 +235,11 @@ _SUBJECT_PATTERNS: tuple[tuple[SubjectMatter, str], ...] = (
             # shall be governed by the provisions of chapter 34.05 RCW."
             # Every state has one, and it is the hinge that makes an
             # agency decision reviewable.
-            r"|\bproceedings?\b|\badministrative procedure act\b"
+            # Virginia calls its APA the Administrative *Process* Act,
+            # and states the hearing right as a right "to be heard" or
+            # "to show cause" rather than by naming a hearing.
+            r"|\bproceedings?\b|\badministrative (?:procedure|process) act\b"
+            r"|\bto be heard\b|\bshow cause\b|\bvacated or amended\b"
         ),
     ),
     (
