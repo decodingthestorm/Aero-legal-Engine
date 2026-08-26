@@ -25,6 +25,7 @@ from legal_engine.api.dependencies import (
 from legal_engine.api.middleware import add_middleware
 from legal_engine.api.routes import (
     auth,
+    extraction,
     graph,
     ingestion,
     legal,
@@ -107,7 +108,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Legal Engine Platform API", version="1.25.0", lifespan=lifespan)
+    app = FastAPI(title="Legal Engine Platform API", version="1.26.0", lifespan=lifespan)
     add_middleware(app)
 
     # /auth (token/register) and /legal/disclaimer must stay unprotected
@@ -133,6 +134,12 @@ def create_app() -> FastAPI:
     )
     app.include_router(
         simulation.router, prefix="/simulation", tags=["simulation"], dependencies=consent_gated
+    )
+    # /extraction sits with them rather than with the merely-protected
+    # routers: it turns statutory prose into obligations a person may act
+    # on, which is the thing the disclaimer is about.
+    app.include_router(
+        extraction.router, prefix="/extraction", tags=["extraction"], dependencies=consent_gated
     )
     app.include_router(
         refactoring.router, prefix="/refactoring", tags=["refactoring"], dependencies=protected
