@@ -489,6 +489,30 @@ class AbstentionReason(str, Enum):
     TRUNCATED_FRAGMENT = "truncated_fragment"
     MODEL_DECLINED = "model_declined"
 
+    UNGROUNDED = "ungrounded"
+    """A backend returned an obligation whose text is not in the source.
+
+    The failure this whole codebase is built against, in its sharpest
+    form. A generative backend that invents a provision produces a
+    well-formed, confidently-worded obligation for a rule that does not
+    exist — indistinguishable in the output from one that does, and
+    worse than any inversion, because an inverted provision is at least
+    traceable to real text. A fabricated one is not law at all.
+
+    So a returned obligation is checked against the source before it is
+    believed, and one that cannot be found there is downgraded to an
+    abstention rather than dropped or accepted. Downgraded rather than
+    dropped because the caller needs to know the backend is fabricating."""
+
+    MALFORMED = "malformed"
+    """The backend's output could not be read as an obligation — a
+    missing field, or a subject or modality outside the schema.
+
+    Fails closed into an abstention rather than raising, because one bad
+    item in a response should not discard the rest of it, and because a
+    model naming a subject this taxonomy does not have is information
+    about a gap rather than a crash."""
+
 
 @dataclass(frozen=True)
 class UnclassifiedProvision:
@@ -672,7 +696,9 @@ class LlmObligationExtractor:
                 "implementing .extract_obligations(text, schema)."
             )
         raw = self._client.extract_obligations(text=text, schema=_OBLIGATION_SCHEMA)
-        return _result_from_payload(raw, citation, jurisdiction_tier, jurisdiction_path)
+        # `text` is passed so every returned provision is checked against
+        # the source before it is believed. See AbstentionReason.UNGROUNDED.
+        return _result_from_payload(raw, citation, jurisdiction_tier, jurisdiction_path, text)
 
 
 def sample_and_gate(
@@ -746,25 +772,99 @@ _OBLIGATION_SCHEMA = {
 }
 
 
+# Characters a model routinely normalises on its way through, none of
+# which change what a provision says.
+_QUOTE_FOLD = str.maketrans({"“": '"', "”": '"', "‘": "'", "’": "'",
+                             "–": "-", "—": "-", "§": "§"})
+
+
+def _normalise_for_grounding(text: str) -> str:
+    return re.sub(r"\s+", " ", text.translate(_QUOTE_FOLD)).strip().casefold()
+
+
+def _is_grounded(fragment: str, source: str) -> bool:
+    """Whether ``fragment`` actually appears in ``source``.
+
+    Containment after whitespace, case and punctuation folding — nothing
+    fuzzier. A paraphrase is not evidence that meaning was preserved, and
+    for a legal tool the safe default when a returned provision cannot be
+    located in the text is to disbelieve it. Folding covers only the
+    transformations that cannot change what a provision says: curly
+    quotes, dash width, section-sign encoding, whitespace, case.
+    """
+    return _normalise_for_grounding(fragment) in _normalise_for_grounding(source)
+
+
 def _result_from_payload(
     payload: dict[str, Any],
     citation: str,
     tier: JurisdictionTier,
     path: tuple[str, ...],
+    source: str = "",
 ) -> ExtractionResult:
-    obligations = tuple(
-        Obligation(
-            citation=citation,
-            jurisdiction_tier=tier,
-            jurisdiction_path=path,
-            subjects=frozenset(SubjectMatter(s) for s in item["subjects"]),
-            modality=Modality(item["modality"]),
-            bearer=Bearer(item.get("bearer", Bearer.REGULATED_PARTY.value)),
-            text=item["text"],
+    """Turn a backend's response into a result, believing none of it by
+    default.
+
+    Three ways an item is refused, each becoming an abstention rather
+    than an exception or an accepted obligation:
+
+    * its text is not in the source (``UNGROUNDED``) — see that member
+    * a field is missing, or a subject or modality is outside the schema
+      (``MALFORMED``)
+    * the backend itself declined (``MODEL_DECLINED``)
+
+    ``source`` defaults to empty for callers that predate the check;
+    grounding is then skipped rather than failing everything, which is
+    the only backwards-compatible reading. Any real backend passes it.
+    """
+    obligations: list[Obligation] = []
+    unclassified: list[UnclassifiedProvision] = []
+
+    for item in payload.get("obligations", []):
+        try:
+            text = item["text"]
+            subjects = frozenset(SubjectMatter(s) for s in item["subjects"])
+            modality = Modality(item["modality"])
+            bearer = Bearer(item.get("bearer", Bearer.REGULATED_PARTY.value))
+            if not subjects or not str(text).strip():
+                raise ValueError("empty text or subjects")
+        except (KeyError, ValueError, TypeError) as exc:
+            unclassified.append(
+                UnclassifiedProvision(
+                    text=str(item.get("text", item))[:500] if isinstance(item, dict) else str(item),
+                    code=AbstentionReason.MALFORMED,
+                    reason=f"backend returned an item this schema cannot hold: {exc}",
+                )
+            )
+            continue
+
+        if source and not _is_grounded(text, source):
+            unclassified.append(
+                UnclassifiedProvision(
+                    text=text,
+                    code=AbstentionReason.UNGROUNDED,
+                    reason=(
+                        "backend returned a provision that does not appear in the source "
+                        "text — not treated as an obligation, because a fabricated "
+                        "provision is indistinguishable from a real one once recorded"
+                    ),
+                )
+            )
+            continue
+
+        obligations.append(
+            Obligation(
+                citation=citation,
+                jurisdiction_tier=tier,
+                jurisdiction_path=path,
+                subjects=subjects,
+                modality=modality,
+                bearer=bearer,
+                text=text,
+            )
         )
-        for item in payload.get("obligations", [])
-    )
-    unclassified = tuple(
+
+    unclassified.extend(
         UnclassifiedProvision(
             text=t,
             code=AbstentionReason.MODEL_DECLINED,
@@ -772,7 +872,7 @@ def _result_from_payload(
         )
         for t in payload.get("unclassified", [])
     )
-    return ExtractionResult(obligations=obligations, unclassified=unclassified)
+    return ExtractionResult(obligations=tuple(obligations), unclassified=tuple(unclassified))
 
 
 # Codifiers interleave amendment history with the statute, in brackets,

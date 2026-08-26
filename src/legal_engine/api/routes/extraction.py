@@ -67,7 +67,21 @@ _REMEDY = {
     AbstentionReason.MODEL_DECLINED: (
         "the extraction backend declined to classify this provision"
     ),
+    AbstentionReason.UNGROUNDED: (
+        "the backend returned a provision that is not in the source text — treat this "
+        "as evidence the backend is fabricating, not as a provision to classify"
+    ),
+    AbstentionReason.MALFORMED: (
+        "the backend's output did not fit the obligation schema — if it named a subject "
+        "this taxonomy lacks, that is where the gap is"
+    ),
 }
+
+# Every reason must have a remedy. Asserted at import rather than
+# discovered as a KeyError in a response: adding a member to
+# AbstentionReason and forgetting this map would break the endpoint only
+# for the abstention that member was added to describe.
+assert set(_REMEDY) == set(AbstentionReason), sorted(set(AbstentionReason) - set(_REMEDY))
 
 
 TierName = Literal["international_treaty", "federal", "state", "county", "municipal"]

@@ -664,6 +664,40 @@ git history on `knowledge_graph/embeddings.py` for what that surfaced). `api` an
 deployment-role extras (a library-only user shouldn't need FastAPI or Celery pulled in) rather
 than lazy-backend extras; CI installs both to cover their tests.
 
+### The guardrail for a backend that does not exist yet
+
+`LlmObligationExtractor` is the real backend and still has no model behind it — no API key, no local
+checkpoint. What it now has is the control that would make turning one on safe, built and tested
+against stubs first.
+
+**A generative backend that invents a provision is the sharpest form of the failure this codebase is
+built against.** It produces a well-formed, confidently-worded obligation for a rule that does not
+exist — indistinguishable in the output from one that does, and worse than any inversion, because an
+inverted provision is at least traceable to real text. A fabricated one is not law at all.
+
+So every returned obligation is checked against the source before it is believed:
+
+| backend returns | outcome |
+|---|---|
+| a provision present in the source | classified |
+| a provision that is not | **refused** → `UNGROUNDED` abstention |
+| a paraphrase that reverses the meaning | **refused** → `UNGROUNDED` abstention |
+| a missing field, or a subject outside the schema | **refused** → `MALFORMED` abstention |
+
+Grounding is containment after folding whitespace, case, curly quotes and dash width — the
+transformations that cannot change what a provision says — and **nothing fuzzier**. A paraphrase is
+not evidence that meaning was preserved. The case that pays for the strictness is a backend
+rendering a 90-night cap as "may be rented for up to 90 nights per year": a plausible sentence
+saying the opposite of the statute, which no fuzzy match distinguishes from a benign rewording.
+
+Refused items become abstentions rather than being dropped, because a caller needs to know the
+backend is fabricating — that is the most important thing they could learn about it. And one bad
+item does not discard the rest of the response: a model naming a subject this taxonomy lacks has
+told you where the gap is.
+
+**Still unverified**: the round trip itself. Same honesty category as `SmtpEmailSender` and the
+KMS/Vault signers — the dispatch shape is real, no model has ever answered it.
+
 ### Six states, and the ceiling this approach has
 
 **68.3%** on Neb. Rev. Stat. ch. 81 — the sixth state, held out, and a different regulatory *domain*

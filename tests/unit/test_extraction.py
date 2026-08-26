@@ -948,3 +948,167 @@ class TestSubjectsAddedOnTheTwoStateRule:
         staffing provision."""
         result = _extract(extractor, "The department shall draw from the pool of certified inspectors.")
         assert SubjectMatter.RECREATIONAL_WATER not in _only(result).subjects
+
+
+_SOURCE = (
+    "No dwelling unit may be rented for more than 90 nights in any calendar year. "
+    "Each operator shall obtain a permit before advertising."
+)
+
+
+class _Backend:
+    """A stub standing in for a generative backend, returning whatever
+    the test needs it to return."""
+
+    def __init__(self, payload):
+        self._payload = payload
+
+    def extract_obligations(self, text, schema):
+        return self._payload
+
+
+def _llm(payload):
+    return LlmObligationExtractor(model="stub", client=_Backend(payload)).extract(
+        _SOURCE, "§ 1", JurisdictionTier.MUNICIPAL, FL_PATH
+    )
+
+
+class TestAGenerativeBackendIsNotBelieved:
+    """The sharpest form of the failure this codebase is built against.
+
+    A backend that invents a provision produces a well-formed,
+    confidently-worded obligation for a rule that does not exist —
+    indistinguishable in the output from one that does, and worse than
+    any inversion, because an inverted provision is at least traceable to
+    real text. A fabricated one is not law at all.
+    """
+
+    def test_a_fabricated_provision_is_refused(self):
+        result = _llm(
+            {
+                "obligations": [
+                    {
+                        "text": "Each operator shall pay an annual fee of $500.",
+                        "modality": "obligation",
+                        "subjects": ["fees"],
+                    }
+                ]
+            }
+        )
+        assert result.obligations == ()
+        assert _sole_abstention(result).code is AbstentionReason.UNGROUNDED
+
+    def test_a_fabrication_is_surfaced_rather_than_dropped(self):
+        """Dropped would hide that the backend is fabricating, which is
+        the single most important thing a caller could learn about it."""
+        result = _llm(
+            {
+                "obligations": [
+                    {"text": "Pets are prohibited.", "modality": "prohibition", "subjects": ["noise"]}
+                ]
+            }
+        )
+        assert _sole_abstention(result).text == "Pets are prohibited."
+        assert result.is_complete is False
+
+    def test_a_real_provision_is_still_believed(self):
+        """The guard must not swallow correct output."""
+        result = _llm(
+            {
+                "obligations": [
+                    {
+                        "text": "Each operator shall obtain a permit before advertising.",
+                        "modality": "obligation",
+                        "subjects": ["permit_registration"],
+                    }
+                ]
+            }
+        )
+        assert _only(result).modality is Modality.OBLIGATION
+        assert result.is_complete is True
+
+    def test_only_meaning_preserving_differences_are_forgiven(self):
+        """Whitespace, case, curly quotes and dash width cannot change
+        what a provision says, so folding them is safe. Nothing fuzzier
+        is allowed: a paraphrase is not evidence that meaning survived."""
+        result = _llm(
+            {
+                "obligations": [
+                    {
+                        "text": "no dwelling unit may be rented for more than 90 nights\n"
+                        "  in any calendar year.",
+                        "modality": "prohibition",
+                        "subjects": ["frequency"],
+                    }
+                ]
+            }
+        )
+        assert _only(result).modality is Modality.PROHIBITION
+
+    def test_a_paraphrase_that_reverses_the_provision_is_caught(self):
+        """The case that makes strictness worth its cost. A backend that
+        renders a 90-night cap as a permission has produced a plausible
+        sentence that says the opposite of the statute, and no amount of
+        fuzzy matching distinguishes it from a benign rewording."""
+        result = _llm(
+            {
+                "obligations": [
+                    {
+                        "text": "A dwelling unit may be rented for up to 90 nights per year.",
+                        "modality": "permission",
+                        "subjects": ["frequency"],
+                    }
+                ]
+            }
+        )
+        assert result.obligations == ()
+        assert _sole_abstention(result).code is AbstentionReason.UNGROUNDED
+
+
+class TestMalformedBackendOutputFailsClosed:
+    @pytest.mark.parametrize(
+        "item",
+        [
+            {"modality": "obligation", "subjects": ["fees"]},                      # no text
+            {"text": "Each operator shall obtain a permit before advertising."},   # no modality
+            {"text": "Each operator shall obtain a permit before advertising.",
+             "modality": "obligation"},                                            # no subjects
+            {"text": "Each operator shall obtain a permit before advertising.",
+             "modality": "compulsory", "subjects": ["fees"]},                      # bad modality
+            {"text": "Each operator shall obtain a permit before advertising.",
+             "modality": "obligation", "subjects": ["vibes"]},                     # bad subject
+            {"text": "   ", "modality": "obligation", "subjects": ["fees"]},        # blank text
+        ],
+    )
+    def test_an_unreadable_item_becomes_an_abstention_not_an_exception(self, item):
+        result = _llm({"obligations": [item]})
+        assert result.obligations == ()
+        assert _sole_abstention(result).code is AbstentionReason.MALFORMED
+
+    def test_one_bad_item_does_not_discard_the_good_ones(self):
+        result = _llm(
+            {
+                "obligations": [
+                    {"text": "Each operator shall obtain a permit before advertising.",
+                     "modality": "obligation", "subjects": ["permit_registration"]},
+                    {"text": "Each operator shall obtain a permit before advertising.",
+                     "modality": "obligation", "subjects": ["not_a_subject"]},
+                ]
+            }
+        )
+        assert len(result.obligations) == 1
+        assert _sole_abstention(result).code is AbstentionReason.MALFORMED
+
+    def test_a_subject_outside_the_taxonomy_is_information_not_a_crash(self):
+        """A model naming a subject this taxonomy does not carry has told
+        you where the gap is. Raising would throw that away along with
+        the rest of the response."""
+        result = _llm(
+            {
+                "obligations": [
+                    {"text": "Each operator shall obtain a permit before advertising.",
+                     "modality": "obligation", "subjects": ["food_allergen_labelling"]}
+                ]
+            }
+        )
+        assert "food_allergen_labelling" in _sole_abstention(result).reason
