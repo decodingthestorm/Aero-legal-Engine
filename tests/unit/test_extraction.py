@@ -714,3 +714,28 @@ class TestCoverageReportsItsOwnDenominator:
         assert result.obligations == ()
         assert result.unclassified == ()
         assert result.coverage == pytest.approx(1.0)
+
+
+class TestCitationBoilerplateIsNotAProvision:
+    """Amendment histories are not law, and must not reach the analysis."""
+
+    @pytest.mark.parametrize(
+        "sentence",
+        [
+            "May 21, 2007; 2017, No. 76, § 5.)",
+            "(Amended 1959, No. 329 (Adj. Sess.), § 27, eff. May 1, 1961.)",
+        ],
+    )
+    def test_the_month_may_is_not_the_modal_may(self, extractor, sentence):
+        """Verbatim from 18 V.S.A. ch. 85, which closes every section with
+        its amendment history. Case-insensitive \bmay\b matched the date,
+        so citation boilerplate became a PERMISSION with no subject — two
+        of nine abstentions in that chapter, padding the coverage
+        denominator with text that is not part of the statute."""
+        result = _extract(extractor, sentence)
+        assert result.obligations == ()
+        assert result.unclassified == ()
+
+    def test_the_real_modal_still_reads_as_permission(self, extractor):
+        result = _extract(extractor, "The Commissioner may establish a fee by rule.")
+        assert _only(result).modality is Modality.PERMISSION

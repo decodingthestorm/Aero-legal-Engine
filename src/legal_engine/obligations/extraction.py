@@ -125,11 +125,26 @@ _SUBJECT_PATTERNS: tuple[tuple[SubjectMatter, str], ...] = (
         SubjectMatter.FIRE_SAFETY,
         (
             r"\bfire (?:safety|code|extinguisher|escape)\b|\bextinguisher"
+            # "Rules establishing fire and life safety requirements" —
+            # the conjunction splits "fire" from "safety", so the clause
+            # above cannot reach it. The statutory phrase of art is
+            # "life safety", and it travels on its own.
+            r"|\blife safety\b|\bfire and life safety\b"
             r"|\bsmoke (?:alarm|detector)\b|\bcarbon monoxide\b|\bmeans of egress\b|\bexit sign"
         ),
     ),
     (SubjectMatter.FEES, r"\bfees?\b|\bsurcharge\b|\bpenalt(?:y|ies)\b|\bfine(?:s|d)?\b"),
-    (SubjectMatter.RULEMAKING, r"\badopt(?:s|ed)? (?:such )?rules?\b|\bby rule\b|\brulemaking\b"),
+    (
+        SubjectMatter.RULEMAKING,
+        # The active form only. Statutes state the same power in the
+        # passive at least as often — "All rules and amendments thereto
+        # shall be adopted in conformance with chapter 34.05 RCW" — where
+        # "rules" and "adopted" are separated by the auxiliary.
+        (
+            r"\badopt(?:s|ed)? (?:such )?rules?\b|\bby rule\b|\brulemaking\b"
+            r"|\brules?\b[^.]{0,40}?\b(?:shall|must|may)\s+be\s+adopted\b"
+        ),
+    ),
     (
         SubjectMatter.RECORDKEEPING,
         (
@@ -160,6 +175,20 @@ _SUBJECT_PATTERNS: tuple[tuple[SubjectMatter, str], ...] = (
         (
             r"\bvariance(?:s)?\b|\bappeal(?:s|ed)?\b|\bhearings?\b"
             r"|\badvisory council\b|\bnotification may be\b|\bupon request by\b"
+            # The generic APA cross-reference: "All such proceedings
+            # shall be governed by the provisions of chapter 34.05 RCW."
+            # Every state has one, and it is the hinge that makes an
+            # agency decision reviewable.
+            r"|\bproceedings?\b|\badministrative procedure act\b"
+        ),
+    ),
+    (
+        SubjectMatter.REGULATORY_AUTHORITY,
+        (
+            r"\bpowers and duties\b|\bhereby granted\b|\bshall have and exercise\b"
+            r"|\bdelegat(?:e|es|ed|ion)\b|\bsupplant\b"
+            r"|\bauthorized to administer\b|\benabling\b"
+            r"|\bjurisdiction (?:of|over)\b"
         ),
     ),
     (
@@ -211,7 +240,13 @@ _DEFINITIONAL = re.compile(
     r"|\bas used in this (?:chapter|section|part|code)\b"
     r"|\bfor (?:the )?purposes of this (?:chapter|section|part|code)\b"
     r"|\bas defined in\b"
-    r"|\bthe term [\"“]?\w+[\"”]? means\b"
+    # Three drafting conventions for the same construct, found one state
+    # at a time. Maine and Minnesota write `"Hazard" means ...`;
+    # Washington writes `The term "person" shall mean ...`. Each variant
+    # missed put a whole definitions section into the coverage
+    # denominator as normative text — five of nine abstentions in RCW
+    # ch. 70.62 were this single form.
+    r"|\bthe term\b[^.]{0,60}?\b(?:shall\s+mean|means)\b"
     # Statutory definition sections almost never write "the term". They
     # write the defined phrase in quotes and follow it with "means":
     #
@@ -225,7 +260,7 @@ _DEFINITIONAL = re.compile(
     # definitions across Maine and Minnesota were being counted as
     # provisions, inflating the coverage denominator with sentences that
     # impose no duty at all.
-    r"|[\"“][^\"”]{1,80}[\"”]\s+(?:means\b|has the meaning\b)"
+    r"|[\"“][^\"”]{1,80}[\"”]\s+(?:shall\s+mean|means|has the meaning)\b"
     # The short-title clause, which nearly every act carries: "This
     # chapter may be cited as the Example Act." The bare "may" read as a
     # permission, so every statute picked up one spurious abstention from
@@ -321,8 +356,15 @@ _INDICATIVE_OBLIGATION = re.compile(
     r"|\b(?:is|are)\s+responsible\s+for\b",
     re.IGNORECASE,
 )
+# The lookahead separates the modal "may" from the month "May". Vermont
+# closes each section with its amendment history — "(Amended 2007, No.
+# 38, § 8a, eff. May 21, 2007; 2017, No. 76, § 5.)" — and case-insensitive
+# \bmay\b matched the date, turning citation boilerplate into a
+# PERMISSION with no subject. Two of nine abstentions in 18 V.S.A. ch. 85
+# were this, inflating the coverage denominator with text that is not
+# part of the statute at all.
 _PERMISSIVE = re.compile(
-    r"\bmay\b|\bis permitted\b|\bare permitted\b|\bis allowed\b", re.IGNORECASE
+    r"\bmay\b(?!\s+\d)|\bis permitted\b|\bare permitted\b|\bis allowed\b", re.IGNORECASE
 )
 
 # re.I matters here: real ordinances write "Adopted March 12, 2019" with

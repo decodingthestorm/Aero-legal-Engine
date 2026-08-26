@@ -664,6 +664,55 @@ git history on `knowledge_graph/embeddings.py` for what that surfaced). `api` an
 deployment-role extras (a library-only user shouldn't need FastAPI or Celery pulled in) rather
 than lazy-backend extras; CI installs both to cover their tests.
 
+### Held-out coverage, and the difference between measuring and tuning
+
+The number for the current code is **79.1%**, on nine sections of 18 V.S.A. ch. 85 (Vermont, Food
+and Lodging Establishments) — 43 normative provisions, fetched and measured without any version of
+the extractor having seen the state.
+
+Every corpus below was held out when its figure was taken, and each was **spent** by the act of
+measuring: once its failures are read and fixed, its score stops being evidence.
+
+| Corpus | Provisions | Held out | Tuned |
+|---|---:|---:|---:|
+| Vermont, 18 V.S.A. ch. 85 | 43 | **79.1%** | 82.9% |
+| Washington, RCW ch. 70.62 | 28 | **67.9%** | 100% |
+| Maine + Minnesota, 9 documents | 94 | **67.0%** | 77.8% |
+| Arizona, A.R.S. § 9-500.39 | 21 | **66.7%** | — |
+| Florida, ch. 509 | — | — | 93.1% |
+
+The right-hand column is what the same text scores *after* its own failures were repaired. It is
+reported only so the gap is visible: Washington reads 100% and that figure is worth nothing, for
+precisely the reason Florida's 93.1% was always worth nothing. A corpus can be a measurement or a
+fixture, never both.
+
+**The fixes generalise, and that was tested rather than assumed.** Running the pre-fix extractor and
+the post-fix extractor over the same *fresh* Washington text:
+
+| | Fresh (WA) | Tuned (ME/MN) |
+|---|---:|---:|
+| gain from v1.19.0 to v1.22.0 | **+10.7 points** | +10.8 points |
+
+Identical transfer. Had those changes been overfitted to Maine and Minnesota, the fresh-text gain
+would have been a fraction of the tuned gain. On Vermont the same changes were worth only +2.3
+points, because Vermont's drafting happened to suffer less from the plural defects — so the honest
+statement is that gains vary by corpus and the *direction* held everywhere it was checked.
+
+**What kept being wrong was never the taxonomy.** Coverage moved from 67% to 79% while exactly one
+subject was added. The rest came from patterns that had never matched what they claimed to:
+
+- `permit` missed *permits*; `licen[cs]e` missed *licenses*, *licensure*, *licensee*
+- `inspect(?:ion|ed|s)?` could not match *inspections* — the alternation ends before the plural
+- `suspend(?:ed|sion)?` spells *suspendsion*, and so never matched anything at all
+- no subject owned *violation* or *offense*, which is the operative word of most penalty sections
+- definitions written three different ways across three states, each variant admitting a whole
+  definitions section into the denominator as though it imposed duties
+- the month **May** read as the modal **may**, turning amendment histories into permissions
+
+Each of these looked correct on the page. None had ever been run against text that would expose it.
+That is the same lesson as the entropy threshold set above its own ceiling, the mypy config that was
+never invoked, and the CI workflow pointed at a branch that did not exist.
+
 ### Scoped to regulatory compliance: the number that matters
 
 The 34.7% figure below mixes three areas of law. Scoped to **public regulatory law** — what this

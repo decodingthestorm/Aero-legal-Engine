@@ -143,6 +143,27 @@ class SubjectMatter(str, Enum):
     rather than what it decides. Present in essentially every regulatory
     statute."""
 
+    REGULATORY_AUTHORITY = "regulatory_authority"
+    """Who holds the power, and who may exercise it on their behalf.
+
+    Added on the two-independent-states rule this taxonomy uses to keep
+    itself from overfitting. Washington grants it wholesale — "The
+    department is hereby granted and shall have and exercise ... powers"
+    (RCW 70.62.250) — and Minnesota delegates it downward: "A local
+    agency operating with a delegation agreement under section 145A.07
+    may request approval from the commissioner to supplant subdivisions 1
+    to 3" (Minn. Stat. § 157.20). Neither had anywhere to go.
+
+    Distinct from RULEMAKING, which is one particular power, and from
+    ADMINISTRATIVE_PROCEDURE, which is how a power gets exercised. This
+    is the enabling question that precedes both: whether the body acting
+    is entitled to act at all.
+
+    It matters beyond bookkeeping. Delegation determines *which* rules
+    bind a party — a local agency operating under a delegation agreement
+    may supplant the state scheme entirely — so a provision in this class
+    can change which other provisions apply."""
+
     HABITABILITY = "habitability"
     """Light, heat, ventilation, water — the conditions that make a
     dwelling fit to occupy."""
