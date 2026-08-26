@@ -28,6 +28,7 @@ from legal_engine.obligations.extraction import (
     ExtractionResult,
     KeywordObligationExtractor,
     LlmObligationExtractor,
+    _sentences,
     sample_and_gate,
 )
 from legal_engine.obligations.models import Bearer, Modality, SubjectMatter
@@ -739,3 +740,104 @@ class TestCitationBoilerplateIsNotAProvision:
     def test_the_real_modal_still_reads_as_permission(self, extractor):
         result = _extract(extractor, "The Commissioner may establish a fee by rule.")
         assert _only(result).modality is Modality.PERMISSION
+
+
+class TestSegmentation:
+    """The splitter, tested on its own terms.
+
+    Coverage is the wrong metric for a parser: better segmentation
+    surfaces provisions that were previously invisible, which grows the
+    denominator as fast as the numerator. These assert the structure
+    directly instead.
+    """
+
+    def test_editorial_brackets_are_not_statute(self):
+        """Codifiers interleave amendment history mid-sentence, in
+        brackets dense with the two characters the splitter breaks on.
+        Me. Rev. Stat. tit. 22 § 2492 came apart into 52 segments, some
+        thirty of them fragments like "PL 2003, c. 452, Pt." """
+        segments = _sentences(
+            "A person may not operate a lodging place; [PL 2003, c. 452, Pt. K, §20 (NEW); "
+            "PL 2003, c. 452, Pt. X, §2 (AFF).] Licences must be displayed."
+        )
+        assert not any("PL 2003" in s for s in segments)
+        assert len(segments) == 2
+
+    @pytest.mark.parametrize(
+        "history",
+        [
+            "SECTION HISTORY PL 1979, c. 30, §2 (AMD). PL 1983, c. 553, §19 (AMD).",
+            "(Amended 1959, No. 329 (Adj. Sess.), § 27, eff. March 1, 1961; 2017, No. 76, § 5.)",
+            "Code 1950, §§ 35-8, 35-9, 35-16; 1970, c. 302; 1981, c. 468.",
+        ],
+    )
+    def test_every_codifier_writes_its_history_differently(self, history):
+        """Maine, Vermont and Virginia each use a different form and none
+        of them bracket it, so each has to be named. Nine noise segments
+        survived in Vermont and six in Virginia while only Maine's was
+        handled."""
+        segments = _sentences(f"The operator shall obtain a licence. {history}")
+        assert segments == ["The operator shall obtain a licence."]
+
+    def test_an_abbreviation_is_not_a_sentence_boundary(self):
+        """"Pt. K" and "No. 329" each began a new segment, because the
+        splitter sees a period followed by a capital and cannot tell."""
+        assert len(_sentences("Rules adopted under Pt. K and No. 329 shall apply.")) == 1
+
+    def test_a_single_letter_marker_is_never_a_sentence_end(self):
+        """No sentence is one letter long, so this is decidable rather
+        than heuristic. Left unguarded it split every limb of every
+        list."""
+        segments = _sentences(
+            "The department may license the following: A. An eating establishment; "
+            "B. A lodging place; C. A campground."
+        )
+        assert len(segments) == 3
+        assert all(s.startswith("The department may license") for s in segments)
+
+    def test_a_lead_in_is_distributed_over_its_limbs(self):
+        """Read literally this is three provisions, and read as segments
+        it was none: the lead-in carried the modality with no subject and
+        abstained, while every limb carried a subject with no modality
+        and was dropped as non-normative."""
+        segments = _sentences(
+            "A person may not operate the following establishments without a licence: "
+            "A. An eating establishment; B. A lodging place; C. A campground."
+        )
+        lead = "A person may not operate the following establishments without a licence"
+        assert segments == [
+            f"{lead} An eating establishment",
+            f"{lead} A lodging place",
+            f"{lead} A campground.",
+        ]
+
+    def test_roman_numeral_limbs_reach_past_seven(self):
+        """At three characters "(viii)" did not match, and the last two
+        limbs of Va. Code § 35.1-13 were swallowed into the seventh."""
+        segments = _sentences(
+            "Regulations shall provide minimum standards for: (i) food handling; "
+            "(ii) sanitation; (iii) linens; (iv) housekeeping; (v) water supply; "
+            "(vi) pest control; (vii) swimming pools; (viii) ice machines; "
+            "(ix) a procedure for obtaining a licence."
+        )
+        assert len(segments) == 9
+        assert segments[-1].endswith("a procedure for obtaining a licence.")
+
+    def test_a_paragraph_following_an_unpunctuated_table_is_split_off(self):
+        """Minnesota sets plan-review fees as a table with no sentence
+        punctuation and then starts the next paragraph mid-flow, so the
+        table and the provision arrived as a single segment."""
+        segments = _sentences(
+            "The fee for plan review is as follows: Lodging less than 25 rooms $300 "
+            "ten cabins or more $450 (g) Special event food stands are not required "
+            "to submit plans."
+        )
+        assert len(segments) == 2
+        assert segments[1].startswith("(g) Special event food stands")
+
+    def test_a_prose_colon_is_left_alone(self):
+        """Conservative by construction: a colon must be followed by a
+        marker. Anything else passes through untouched, so a table or an
+        ordinary colon is not mangled into false provisions."""
+        text = "The operator shall provide the following: adequate light, heat and ventilation."
+        assert _sentences(text) == [text]

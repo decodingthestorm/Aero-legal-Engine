@@ -116,8 +116,13 @@ _SUBJECT_PATTERNS: tuple[tuple[SubjectMatter, str], ...] = (
             r"|\bbathroom|\btoilet|\bplumbing\b|\bgarbage\b|\brefuse\b"
             r"|\bfood-?borne\b|\bpotable\b|\bdisinfect|\bfumigat"
             # Linen hygiene lives here rather than in a lodging-specific
-            # subject — see SubjectMatter.SANITATION.
+            # subject — see SubjectMatter.SANITATION. The docstring said
+            # so from the start and the pattern did not: "linen" and
+            # "towel" were absent, so Virginia's "the provision, storage,
+            # and cleansing of linens and towels" (Va. Code § 35.1-13)
+            # found no subject at all while "sheets" would have.
             r"|\bpillowslips?\b|\bsheets?\b|\bbedding\b|\blaundered\b|\bmattress"
+            r"|\blinens?\b|\btowels?\b|\bhousekeeping\b"
             r"|\bcontagious\b|\bcommunicable disease\b|\bpublic health risk\b"
         ),
     ),
@@ -715,9 +720,158 @@ def _result_from_payload(
     return ExtractionResult(obligations=obligations, unclassified=unclassified)
 
 
+# Codifiers interleave amendment history with the statute, in brackets,
+# mid-sentence:
+#
+#     A. An eating establishment; [PL 2003, c. 452, Pt. K, §20 (NEW); PL
+#     2003, c. 452, Pt. X, §2 (AFF).] B. [PL 2017, c. 322, §4 (RP).]
+#
+# It is not law, and it is dense with the two characters the splitter
+# breaks on. Me. Rev. Stat. tit. 22 § 2492 came apart into 52 segments,
+# of which roughly thirty were fragments of citations — "PL 2003, c. 452,
+# Pt.", "K, §20 (NEW);", "X, §2 (AFF).] B." Removing it first is what
+# makes every later rule tractable.
+_EDITORIAL_BRACKET = re.compile(r"\[[^\]]{0,300}\]")
+
+# The trailing history block, which is pure metadata and often longer
+# than the section it annotates. Every codifier writes it differently and
+# none of them bracket it, so each form has to be named:
+#
+#   Maine       SECTION HISTORY PL 1979, c. 30, §2 (AMD). ...
+#   Vermont     (Amended 1959, No. 329 (Adj. Sess.), § 27, eff. March 1,
+#               1961; 2007, No. 38, § 8a, eff. May 21, 2007; ...)
+#   Virginia    Code 1950, §§ 35-8, 35-9, 35-16; 1970, c. 302; ...
+#
+# All three are trailing, so each pattern runs to the end of the text.
+# Nine noise segments survived in Vermont and six in Virginia while only
+# the Maine form was handled.
+_SECTION_HISTORY = re.compile(
+    r"\bSECTION HISTORY\b.*"
+    r"|\((?:Amended|Added)\s+\d{4}.*"
+    r"|\bCode\s+19\d\d,\s*§{1,2}.*",
+    re.DOTALL | re.IGNORECASE,
+)
+
+# Abbreviations whose period is not a sentence boundary. Without this,
+# "Pt. K" and "No. 329" each start a new segment, because the splitter
+# sees a period followed by a capital and cannot tell the difference.
+_ABBREVIATION = re.compile(
+    r"\b(?:Pt|Sec|Secs|No|Nos|Art|Ch|Chap|Subd|Subds|Adj|Sess|eff|Rev|Stat|Ann|Supp"
+    r"|cl|para|paras|subs|Inc|Co|Corp|Ltd|approx|Dept|Div|Comm|Reg|Regs|Op|Att|Gen)\.",
+    re.IGNORECASE,
+)
+
+# An enumerated limb's marker — the "A." in "A. An eating establishment".
+# A single letter followed by a period is never the end of a sentence,
+# because no sentence is one letter long, so this is decidable rather
+# than heuristic. Left unprotected it split every limb of every list:
+# § 2492's eight-limb licensing provision produced "B.", "C.", "D." and
+# "E." as segments in their own right.
+_LIST_MARKER = re.compile(r"(?<![A-Za-z])([A-Z])\.(?=\s)")
+
+# Stands in for a protected period while splitting. U+0000 cannot occur
+# in statutory text, so restoring it afterwards is lossless.
+_PERIOD_GUARD = "\x00"
+
+
+def _strip_editorial(text: str) -> str:
+    """Remove codifier annotations, which are not part of the statute."""
+    text = _SECTION_HISTORY.sub(" ", text)
+    text = _EDITORIAL_BRACKET.sub(" ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+# A lead-in and the first of its limbs: everything up to a colon, then a
+# marker. The colon is what makes this decidable — an enumerated list in
+# a statute is introduced by one, and a sentence that merely contains a
+# marker does not have one.
+#
+# The marker allows five characters because statutes enumerate in roman
+# numerals. At {1,3} the ninth limb of Va. Code § 35.1-13 was lost: (i)
+# through (vii) matched, "(viii)" did not, and the last two limbs were
+# swallowed into the seventh.
+_LEAD_IN = re.compile(r"^(?P<lead>.*?[^.;:]):\s*(?P<limbs>(?:\([a-z0-9]{1,5}\)|[A-Z]\.)\s+.*)$")
+
+# Where one limb ends and the next begins.
+_LIMB_BOUNDARY = re.compile(r"\s+(?=(?:\([a-z0-9]{1,5}\)|[A-Z]\.)\s)")
+
+# The marker itself, stripped once a limb has been isolated.
+_LIMB_MARKER = re.compile(r"^(?:\([a-z0-9]{1,5}\)|[A-Z]\.)\s*")
+
+# Connectives left dangling at a limb's tail when the list is read apart.
+_LIMB_TAIL = re.compile(r"[;,]?\s*(?:or|and)?\s*$", re.IGNORECASE)
+
+
+def _distribute_lead_ins(segments: list[str]) -> list[str]:
+    """Rejoin an enumerated list into one provision per limb.
+
+    Statutes routinely state a duty once and enumerate what it applies
+    to::
+
+        A person ... may not conduct ... the following establishments
+        ... without a license issued by the department:
+            A. An eating establishment;
+            C. A lodging place;
+            D. A recreational camp or sporting camp;
+
+    Read literally that is eight provisions, and read as segments it was
+    none: the lead-in carried the modality with no subject and abstained,
+    while every limb carried a subject with no modality and was dropped
+    as non-normative. The duty and the thing it attaches to were in
+    different segments, so neither half could be classified.
+
+    Distributing the lead-in over each limb is what the text means — "may
+    not operate an eating establishment without a licence" is a provision
+    the statute states, just economically.
+
+    Conservative by construction. A colon must be present, a marker must
+    follow it, and only immediately-subsequent marked segments are
+    consumed; anything else is passed through untouched, so a table or a
+    prose colon is left exactly as it was.
+    """
+    out: list[str] = []
+    index = 0
+    while index < len(segments):
+        match = _LEAD_IN.match(segments[index])
+        if match is None:
+            out.append(segments[index])
+            index += 1
+            continue
+
+        lead = match.group("lead").strip()
+        remainder = [match.group("limbs")]
+        cursor = index + 1
+        while cursor < len(segments) and _LIMB_MARKER.match(segments[cursor]):
+            remainder.append(segments[cursor])
+            cursor += 1
+
+        limbs = [
+            stripped
+            for chunk in _LIMB_BOUNDARY.split(" ".join(remainder))
+            if (stripped := _LIMB_TAIL.sub("", _LIMB_MARKER.sub("", chunk)).strip())
+        ]
+        # A list whose limbs are all repealed leaves nothing to attach
+        # the duty to; emitting the bare lead-in is better than losing it.
+        out.extend(f"{lead} {limb}" for limb in limbs) if limbs else out.append(lead)
+        index = cursor
+    return out
+
+
 def _sentences(text: str) -> list[str]:
-    parts = re.split(r"(?<=[.;])\s+(?=[A-Z(])", text.strip())
-    return [p.strip() for p in parts if p.strip()]
+    text = _strip_editorial(text)
+    guarded = _ABBREVIATION.sub(lambda m: m.group(0)[:-1] + _PERIOD_GUARD, text)
+    guarded = _LIST_MARKER.sub(lambda m: m.group(1) + _PERIOD_GUARD, guarded)
+    # The second alternative catches a provision that begins with a
+    # lettered marker after text the splitter cannot break on. Minnesota
+    # sets its plan-review fees as an unpunctuated table and then starts
+    # the next paragraph mid-flow -- "... ten cabins or more $450 (g)
+    # Special event food stands are not required to submit plans" -- so
+    # the table and the following provision arrived as one segment.
+    parts = re.split(
+        r"(?<=[.;])\s+(?=[A-Z(])|\s+(?=\([a-z]\)\s+[A-Z])", guarded.strip()
+    )
+    restored = [p for p in (q.replace(_PERIOD_GUARD, ".").strip() for q in parts) if p]
+    return _distribute_lead_ins(restored)
 
 
 def _classify_modality(sentence: str) -> Modality | None:

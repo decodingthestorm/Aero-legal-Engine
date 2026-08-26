@@ -664,6 +664,48 @@ git history on `knowledge_graph/embeddings.py` for what that surfaced). `api` an
 deployment-role extras (a library-only user shouldn't need FastAPI or Celery pulled in) rather
 than lazy-backend extras; CI installs both to cover their tests.
 
+### The parser, and why coverage is the wrong way to score it
+
+Segmentation was the dominant remaining defect once the patterns were fixed, and it is measured on
+its own terms rather than through coverage — because better segmentation surfaces provisions that
+were previously invisible, growing the denominator as fast as the numerator.
+
+| Across all five states | v1.23.0 | now |
+|---|---:|---:|
+| segments produced | 577 | 460 |
+| citation-noise segments | 91 | **0** |
+| stub segments (≤12 chars) | 54 | 32 |
+
+Four distinct defects, not one:
+
+- **Amendment history interleaved with the statute.** Codifiers write it mid-sentence, in brackets
+  dense with the two characters the splitter breaks on. Me. Rev. Stat. tit. 22 § 2492 came apart
+  into 52 segments, some thirty of them fragments like `PL 2003, c. 452, Pt.` Every codifier uses a
+  different form and none of them bracket it the same way, so Maine, Vermont and Virginia each
+  needed naming.
+- **Abbreviations.** `Pt. K` and `No. 329` each started a new segment.
+- **List markers.** A single letter followed by a period is never a sentence end — no sentence is
+  one letter long — but unguarded it split every limb of every list.
+- **Severed lead-ins.** This one changed answers rather than tidiness.
+
+**The severed lead-in is worth stating in full.** A statute states a duty once and enumerates what
+it applies to:
+
+> A person … may not conduct … the following establishments … without a license issued by the
+> department: **A.** An eating establishment; **C.** A lodging place; **D.** A recreational camp …
+
+Read literally that is eight provisions. Read as segments it was *none*: the lead-in carried the
+modality with no subject and abstained, while every limb carried a subject with no modality and was
+dropped as non-normative. The duty and the thing it attaches to sat in different segments, so
+neither half could be classified. Distributing the lead-in over each limb is what the text means.
+
+**What it bought, stated as recall rather than ratio.** On Virginia — the fifth state, held out at
+46.7% before any of this — provisions found went 36 → 54 and provisions *classified* went 21 → 31.
+That is ten more real provisions read, a 48% increase in absolute terms, while the coverage ratio
+stayed flat at ~58%. Both numbers are true and the ratio is the less informative one: the newly
+surfaced provisions hit taxonomy gaps, and an abstention the caller is told about is the intended
+outcome, not a regression.
+
 ### Held-out coverage, and the difference between measuring and tuning
 
 The number for the current code is **79.1%**, on nine sections of 18 V.S.A. ch. 85 (Vermont, Food
