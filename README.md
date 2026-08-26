@@ -698,6 +698,50 @@ told you where the gap is.
 **Still unverified**: the round trip itself. Same honesty category as `SmtpEmailSender` and the
 KMS/Vault signers — the dispatch shape is real, no model has ever answered it.
 
+### Delaware: where the engine stops being about states
+
+Measured once, held out, against a different **area** of law rather than a different state —
+Del. Code tit. 8, the General Corporation Law. 353 provisions across 49 sections, never seen.
+
+| Del. Code tit. 8 | Provisions | Classified |
+|---|---:|---:|
+| Ch. 5 Franchise Tax | 94 | **76.6%** |
+| Subch. II Powers | 49 | 28.6% |
+| Subch. I Formation | 183 | 23.0% |
+| Subch. XV Public Benefit Corporations | 27 | **3.7%** |
+| Pooled | 353 | 36.5% |
+
+**The variance inside one statute is the finding, not the pooled number.** Franchise tax scores like
+a regulatory corpus because it *is* one — filings, deadlines, fees, exemptions, penalties.
+`taxation` fired 61 times, `recordkeeping` 56, `fees` 28. The engine did not fail at Delaware; it
+succeeded on the regulatory half of a corporate code and failed on the governance half.
+
+The public-benefit subchapter is the sharp end: **one provision of twenty-seven**, and the one that
+classified was a suits-to-enforce section. What it could not read:
+
+- fiduciary balancing — *"shall be managed in a manner that balances the pecuniary interests of
+  stockholders, the interests of those materially affected, and the public benefit"* (§§ 362, 365)
+- what a certificate of incorporation must identify and state (§ 362)
+- *"the board of directors shall manage or direct the business and affairs"* (§ 365)
+- stock certificates and § 151(f) notices (§ 364)
+- stockholder reporting — § 366 alone is twelve provisions, all missed
+
+That last block is partly a vocabulary gap: § 366 is reporting, `RECORDKEEPING` exists, and it knows
+`record` and `report` but not `statement`. Roughly half the subchapter's misses look recoverable that
+way. The other half — fiduciary duty, charter contents, share instruments — are legal concepts this
+taxonomy does not have and, under its stated scope, should not.
+
+**This is the third-domain trigger firing.** `SubjectMatter` documents the split condition as "a
+third domain, or any subject name that has to be qualified to avoid colliding". Corporate governance
+is that third domain, and it is not merely a set of new subjects: regulatory law is an authority
+imposing duties on a regulated party, while corporate law is largely *enabling* — what an entity may
+do, and what its officers owe. The `Bearer` axis has no member for "a director, to the corporation".
+
+**What it implies for scope.** The automatable half of corporate compliance is the filing half: what
+is due, by when, for how much, with what exemption and what penalty. The half that resists is the
+half where the answer is a fiduciary judgment — and that is also the half where any completeness
+guarantee would be a warranty nobody can back.
+
 ### Six states, and the ceiling this approach has
 
 **68.3%** on Neb. Rev. Stat. ch. 81 — the sixth state, held out, and a different regulatory *domain*

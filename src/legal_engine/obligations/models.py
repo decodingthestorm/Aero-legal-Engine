@@ -77,6 +77,23 @@ class SubjectMatter(str, Enum):
     — a much larger change than adding a member, which is precisely why
     it is worth hitting deliberately rather than by surprise.
 
+    **The trigger has now fired, with evidence.** Measured cold against
+    Del. Code tit. 8 (General Corporation Law), 353 provisions across 49
+    sections: 76.6% on the franchise-tax chapter and **3.7% on the
+    public-benefit-corporation subchapter** — one provision of
+    twenty-seven. Franchise tax scores like a regulatory corpus because
+    it is one; the governance subchapter is a different area of law
+    wearing the same statute.
+
+    Do **not** answer this by adding fiduciary and charter subjects here.
+    The mismatch runs deeper than the subject axis: regulatory law is an
+    authority imposing duties on a regulated party, and corporate law is
+    largely *enabling* — what an entity may do, and what its officers owe
+    each other. ``Bearer`` has no member for "a director, to the
+    corporation", and ``Modality`` has no way to say "may, if the charter
+    permits". A corporate domain needs its own taxonomy, its own bearer
+    set, and its own held-out corpora, built the way this one was.
+
     The first three are grouped because Florida's preemption names
     exactly them, but they are genuinely distinct: a ban, a minimum-stay
     rule, and a nights-per-year cap are three different regulatory acts.
